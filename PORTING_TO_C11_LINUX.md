@@ -7,6 +7,12 @@ inspection of every source file (sizes, `uses` clauses, class/record/asm
 usage, coupling between subsystems), not a general impression of the
 project. All findings below are grep/read-verified against this checkout.
 
+**Source location.** The full original Pascal program is available in this
+repository as the `ay_emul` git submodule
+(`git@github.com:pdxiv/ay_emul.git`) — run `git submodule update --init`
+to fetch it. Every file path referenced below (`Z80.pas`, `Players.pas`,
+etc.) lives under that submodule, not at the repository root.
+
 **Scope: chiptune playback and WAV export only.** This port targets
 playback of the chiptune/tracker formats `Players.pas` and friends already
 emulate (AY/YM/SNDH/Atari-ST/etc.), plus exporting rendered audio to WAV.
@@ -141,15 +147,15 @@ is written for speed using hand-tuned x86 assembly. This is the highest
   and correctness testing (flag behavior, cycle counts) — not mechanical,
   and the single most labor- and risk-intensive item in this entire port
   if done this way.
-- **Recommended instead: don't hand-port this file — replace it with a
-  mature open-source C Z80 core.** This is exactly the kind of
-  well-understood, exhaustively-reimplemented problem (ZEXALL/ZEXDOC test
-  suites exist specifically to pin down Z80 behavior, including
-  undocumented flags/opcodes) where a fresh hand-port is more likely to
-  introduce subtle bugs than to avoid them. See §7.1 for specifics
-  (candidate libraries, the T-state/callback-hook compatibility check
-  needed before committing to one, and why this preference doesn't apply
-  equally to every subsystem).
+- **Decided instead: don't hand-port this file — replace it with
+  [superzazu/z80](https://github.com/superzazu/z80)** (single-file C,
+  MIT-licensed). This is exactly the kind of well-understood,
+  exhaustively-reimplemented problem (ZEXALL/ZEXDOC test suites exist
+  specifically to pin down Z80 behavior, including undocumented
+  flags/opcodes) where a fresh hand-port is more likely to introduce subtle
+  bugs than to avoid them. See §7.1 for the fidelity/compatibility gate
+  that must still be run before integration, and why this preference
+  doesn't apply equally to every subsystem.
 
 ### 3.2 The precompiled 68000 core: technically free to reuse, but we're replacing it with Musashi
 
@@ -565,7 +571,7 @@ mechanical fraction of that work, without changing the conclusion that
 | `AnsiString`/`UTF8String` (ref-counted, GC'd) | pervasive | UTF-8 `char*` buffers via GLib `GString`/`gchar*` (see §7.4) instead of a custom ownership convention |
 | `WideString`/`UnicodeString` | 22, thin | not needed as a general layer — isolate the few real Windows/Unicode-API touch points instead |
 | `TStringList`/`TStrings` | 11, in 4 files | GLib `GPtrArray`/`GStrv` (see §7.4) instead of a custom string-list type |
-| inline `asm` (x86, Intel syntax) | 241 (238 in `Z80.pas`) | **prefer replacing `Z80.pas`'s dispatch core with a mature open-source C Z80 library** (§7.1) over hand-transliteration; hand-porting to C/inline `asm` is the fallback, and the highest-risk item in the port if it comes to that |
+| inline `asm` (x86, Intel syntax) | 241 (238 in `Z80.pas`) | **decided: replace `Z80.pas`'s dispatch core with [superzazu/z80](https://github.com/superzazu/z80)** (§7.1) rather than hand-transliterating; hand-porting to C/inline `asm` is the fallback if the fidelity gate fails, and the highest-risk item in the port if it comes to that |
 | `external name '...'` + linked `.o` | `Starcpu*.o` (Starscream 68000 core) | Not reused — replaced with **Musashi** (MIT-licensed C 68000 core, §3.2/§7.1); Starscream's `.o` is technically C-ABI-reusable but ships with no confirmed license |
 | generics (`specialize TFPGList<T>`) | 1, effectively dead code | not needed |
 | `set of TShiftState` etc. (LCL-specific) | GUI-layer only | GTK/GDK modifier-mask equivalents |
@@ -589,7 +595,7 @@ fidelity-risk/payoff tradeoff is genuinely different in each case.
 
 | Core | Current | Recommended C library | License | Notes |
 |---|---|---|---|---|
-| Z80 | `Z80.pas`, 238 asm blocks (§3.1) | e.g. `superzazu/z80` (single-file, MIT) or a MAME-derived core | check per-candidate; several permissive options exist | **Gate before adopting:** must pass ZEXALL/ZEXDOC (undocumented opcodes/flags, XF/YF — this app's demoscene-era tricks rely on them), and must expose per-instruction T-state counts plus memory/port read/write callback hooks compatible with how `Z80.pas` already wires up `ZXInProc`/`ZXOutProc`/`CPCInProc`/`CPCOutProc` per machine variant (confirmed present in the current interface — see §3.1's cross-reference). An opaque "run for N cycles" API is not a drop-in fit for this codebase's per-step interrupt/border-timing model. |
+| Z80 | `Z80.pas`, 238 asm blocks (§3.1) | **Decided: [superzazu/z80](https://github.com/superzazu/z80)** (single-file C, MIT-licensed) | MIT | Its `z80_step()`-returns-cycles-taken API, and separate memory-callback / port-callback design, match this codebase's existing per-step, callback-driven model closely (`Z80_Step` already accumulates T-states per instruction into `CurrentTact`, and already swaps `ZXInProc`/`ZXOutProc`/`CPCInProc`/`CPCOutProc` per machine variant) — an opaque "run for N cycles" API would not have been a drop-in fit. **Gate to run before integration (not yet done):** pass ZEXALL/ZEXDOC, and differentially verify undocumented-flag (XF/YF) behavior against this project's own ASM-derived reference (`Z80.pas`'s flag-setting routines read real x86 EFLAGS bits to derive them — this app's demoscene-era chiptunes rely on that precision), plus confirm IM 0/1/2 interrupt-acceptance cycle counts match what `Z80_Step` currently hardcodes. NMI is unused by this codebase and needs no verification. |
 | MC68000 (Atari ST) | `Starcpu*.o` — precompiled **Starscream** core (Neill Corlett, modified by Stéphane Dallongeville/Carsten Elton Sørensen — credited in `credits.txt`) | **Decided: [Musashi](https://github.com/kstenerud/Musashi)** (Karl Stenerud's 68000 core, plain C, actively maintained) | Musashi: unambiguously MIT. Starscream: ⚠️ no license file ships in this repo — only an author credit | Starscream's `.o` is technically a zero-cost, C-ABI-compatible reuse (confirmed via `nm` — see §3.2), but with no confirmed redistribution license it's not an acceptable dependency for this rewrite, so we're not using it. Musashi costs real integration work Starscream would have avoided (writing the memory/interrupt glue Musashi expects, rather than reusing `Starcpu.inc`'s existing `external` declarations almost verbatim), but that's the tradeoff for clean licensing. |
 | AY/YM sound chip | `AY.pas` (`TSoundChip`, only 3 asm blocks) | `ayumi` (MIT) or `libayemu` (LGPL) | permissive | Much lower risk than the Z80 swap (small surface, no timing-critical dispatch loop) — but §3 flags a point that still applies here: this project's `Amplitudes_AY` DAC table is explicitly credited to "Hacker KAY" and is a deliberate, specific tuning choice. Adopting a library's own table changes the audio output; treat that as a conscious fidelity decision, not a transparent substitution, and consider keeping this project's table plugged into the library if it exposes that as a parameter. |
 
@@ -671,12 +677,13 @@ Given §2's finding that the engine is largely GUI-decoupled, and §5's
 finding that the GUI is the highest-risk, lowest-mechanical-translatability
 part of the codebase, the port is much lower-risk done in this order:
 
-0. **Evaluate and decide on the remaining CPU-core library** (§7.1) before
-   writing any engine code: confirm a Z80 candidate passes ZEXALL/ZEXDOC
-   and exposes the T-state/callback-hook shape this codebase needs. (The
-   68000 core is already decided — Musashi, §3.2/§7.1 — not open.) Getting
-   the Z80 choice settled first avoids rework — it determines the shape of
-   the C static library step 1 builds.
+0. **Run the Z80 fidelity gate** (§7.1) before writing any engine code:
+   confirm superzazu/z80 — already decided on — passes ZEXALL/ZEXDOC and
+   matches the T-state/callback-hook shape this codebase needs. (The 68000
+   core is likewise already decided — Musashi, §3.2/§7.1.) Both CPU-core
+   choices are made; this step is verification, not selection, and doing
+   it first avoids rework — it determines the shape of the C static
+   library step 1 builds.
 1. **Core CPU/sound emulation** (Z80 via the library chosen in step 0, AY
    likewise per §7.1, 68000 via Musashi) as a standalone C static library
    with no GTK/audio-output dependency. Get correctness nailed down early
