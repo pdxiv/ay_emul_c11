@@ -1,0 +1,3 @@
+[submodule "ay_emul"]
+	path = ay_emul
+	url = git@github.com:pdxiv/ay_emul.git
