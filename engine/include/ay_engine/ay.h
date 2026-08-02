@@ -101,8 +101,23 @@ typedef struct ay_engine {
   int number_of_channels;   /* settings.pas: NumberOfChannels (1 or 2) */
   int sample_bits;          /* settings.pas: SampleBit (8 or 16) */
   uint8_t beeper_max;       /* settings.pas: BeeperMax (BeeperMaxDef=146) */
-  uint8_t atari_dma_max;    /* settings.pas: Atari_DMAMax - 0 here, Atari/68000
-                             * mixing is out of scope this milestone (MIG-0008) */
+  uint8_t atari_dma_max;    /* settings.pas: Atari_DMAMax - 0 disables the
+                             * DMA-sound headroom contribution entirely
+                             * (matches original behavior with DMA sound
+                             * absent/stopped), nonzero when a caller wires
+                             * up engine/dma_sound.h via on_mix_dma below. */
+  int atari_dma_level;      /* AY.pas: Atari_DMALevel, computed by
+                             * ay_engine_calculate_level_tables - the scale
+                             * factor engine/dma_sound.h's dma_sound_mix
+                             * expects. */
+
+  /* AY.pas: Atari_MixDMASnd(LevL,LevR), called from Synthesizer_Mixer_Q/
+   * _Mono before the AY tone/noise/envelope channels are added in. NULL
+   * (the default) matches the original with DMA sound inactive - a real
+   * hook belongs to whichever milestone wires up a live dma_sound alongside
+   * this engine (see migration_debt.yaml). */
+  void (*on_mix_dma)(void* userdata, int* lev_l, int* lev_r);
+  void* on_mix_dma_userdata;
 
   /* Per-channel index/pan weights, settings-derived (AY.pas: Index_AL etc). */
   uint8_t index_al, index_ar, index_bl, index_br, index_cl, index_cr;

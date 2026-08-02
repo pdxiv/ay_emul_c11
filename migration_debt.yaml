@@ -232,23 +232,26 @@ entries:
       set) - never in Z80.pas.
 
   - id: MIG-0008
-    title: "Atari DMA sound mixing (Atari_MixDMASnd) stubbed as a no-op"
+    title: "Atari DMA sound mixing (Atari_MixDMASnd) wired into engine/ay.c's mixer"
     subsystem: engine/ay
-    state: behaviorally_incomplete
+    state: validated
     summary: >
       AY.pas's Synthesizer_Mixer_Q/_Mono call Atari_MixDMASnd(LevL,LevR)
       (atari.pas) to mix in Atari ST DMA sample playback alongside the AY
-      chip's own output. engine/ay.c's ay_chip_synthesizer_mixer_q(_mono)
-      omits this call entirely; atari_dma_max defaults to 0 so the
-      level-table headroom computation (Calculate_Level_Tables) already
-      accounts for zero DMA contribution consistently.
+      chip's own output. ay_engine now has an on_mix_dma callback hook
+      (engine/include/ay_engine/ay.h), called at the same point in
+      ay_chip_synthesizer_mixer_q/_mono the original calls
+      Atari_MixDMASnd, and an atari_dma_level field (AY.pas's
+      Atari_DMALevel, computed by ay_engine_calculate_level_tables
+      alongside beeper_level - AY.pas:1007). engine/atari_emulate.c wires
+      this hook to engine/dma_sound.c's dma_sound_mix (MIG-0014).
     rationale: >
-      The 68000 core itself is now ported (MIG-0012), but DMA sound
-      emulation (MIG-0013) - the thing that would actually feed
-      Atari_MixDMASnd real sample data - is its own follow-on milestone,
-      not something to stub badly here.
+      Closed alongside the DMA sound emulation that actually feeds it real
+      sample data (MIG-0014) - the two were always the same seam.
     verification: >
-      Not applicable - no Atari-format file exercises this path yet.
+      tests/oracle_diff's "dma" scenario (byte-identical mixed output vs
+      atari.pas's real Atari_MixDMASnd) exercises this path end-to-end via
+      engine/atari_emulate.c's on_mix_dma wiring.
 
   - id: MIG-0009
     title: "8-bit PCM output (Synthesizer_Stereo8/Mono8) ported"
@@ -368,72 +371,148 @@ entries:
       real hardware register is wired up this milestone - see MIG-0014).
 
   - id: MIG-0013
-    title: "MFP timer emulation not ported"
-    subsystem: engine/m68k_bus
-    state: behaviorally_incomplete
+    title: "MFP timer emulation ported and validated"
+    subsystem: engine/mfp
+    state: validated
     summary: >
       atari.pas's EmulateTimer/MFP_Registers (atari.pas:111-160,356-491)
       emulate the Atari ST's MFP68901's four timers (A-D), which drive
       SNDH's common playback frequencies (sndh.pas's TPlayGen: GenTA..GenTD)
-      and gate interrupts into the 68000 core. Not ported.
+      and gate interrupts into the 68000 core. Ported to engine/mfp.c/.h:
+      the 24-byte register file, four mfp_timer structs, mfp_emulate_timer
+      (the countdown/reload logic), and register read/write handlers
+      matching SetMFPRegister/mfp_readbyte's decode, exposed as an
+      m68k_bus callback region at $FFFA00-$FFFA2F.
     rationale: >
-      Confirmed (this milestone's exploration) that MFP timer scheduling is
-      interleaved with the CPU exec loop itself (Atari_Emulate computes a
-      cycle budget bounded by the nearest upcoming MFP timer event before
-      each s68000exec call) - real, hand-ported hardware emulation on the
-      same scale as the AY.pas port, not a small extension of the bare CPU
-      core. Deliberately left to its own follow-on milestone rather than
-      attempted partially alongside the CPU core.
+      Interrupt DELIVERY intentionally differs from the original - see
+      MIG-0013b. The countdown/reload timing and register semantics
+      (the actual "MFP emulation" this entry is about) are a faithful,
+      validated port.
     verification: >
-      Not applicable yet - no Atari-format file exercises this path.
+      tests/oracle_diff's "mfp" scenario: identical countdown-until-fire
+      values and IPR-bit-set behavior between atari.pas's real EmulateTimer
+      (via ay_emul/OracleHarness.pas's RunMFPTest, driving the new
+      Oracle_MFP_* API added to atari.pas for this purpose) and
+      engine/mfp.c. tests/engine_smoke/test_atari.c additionally covers
+      live-countdown register reads and a full CPU-driven interrupt-firing
+      integration test (see MIG-0013b for why that full-delivery path
+      isn't oracle-compared).
+
+  - id: MIG-0013b
+    title: "MFP/VBL interrupt DELIVERY model deliberately differs from the original (Starscream polling vs Musashi level-triggered)"
+    subsystem: engine/mfp
+    state: validated
+    summary: >
+      Discovered while building the "mfp" oracle scenario: atari.pas's real
+      EmulateTimer, when a timer's interrupt is both enabled (IE) and
+      unmasked (IM), attempts synchronous delivery inline
+      (s68000interrupt(6,vector)) and - since Starscream reports success
+      against a minimal/degenerate CPU context - immediately auto-clears
+      the IPR bit it just set, all within the same EmulateTimer call. This
+      is Starscream's own "push this vector now, tell me if taken"
+      polling model. engine/mfp.c (and engine/m68k_bus.c/atari_emulate.c
+      generally) instead model real level-triggered 68000 interrupt
+      hardware: IPL lines asserted via m68k_bus_set_irq, consumed by
+      Musashi at its own next eligible instruction boundary via the
+      int_ack callback (mfp_ack_interrupt) - there is no "attempt delivery
+      inline while computing timer state" step, and none is needed, since
+      the CPU services it on its own. The original's per-timer ICnt
+      retry counter (for when synchronous delivery fails) is likewise not
+      replicated - unnecessary under the level-triggered model.
+    rationale: >
+      This is the same category of decision as MIG-0001 (Z80 IM0/IM1
+      timing): a real, deliberate difference driven by the replacement
+      library's architecture, recorded so it's never mistaken for an
+      unverified gap. The oracle's "mfp" scenario is deliberately designed
+      (IMRA left unmasked=0) to compare only the parts that ARE directly
+      comparable between the two models (countdown timing, IPR-bit-set on
+      fire) - see RunMFPTest's comment in OracleHarness.pas for the full
+      reasoning. Full interrupt-delivery-and-service correctness is
+      instead validated via tests/engine_smoke/test_atari.c's
+      test_atari_emulate_vbl_scheduling, a real CPU-executed program with
+      an interrupt handler, run purely against engine/ - not comparable to
+      Starscream's polling model, but a complete demonstration that
+      Musashi's level-triggered delivery works end-to-end (99 VBL
+      interrupts fired, 99 handler invocations counted).
+    verification: >
+      tests/engine_smoke/test_atari.c's test_atari_emulate_vbl_scheduling
+      (self-consistency, real interrupt delivery via Musashi).
+      tests/oracle_diff's "mfp" scenario (register/timing-level agreement
+      on the parts common to both models).
 
   - id: MIG-0014
-    title: "DMA sound / STE DAC emulation, and YM2149 region wiring, not ported"
-    subsystem: engine/m68k_bus
-    state: behaviorally_incomplete
+    title: "DMA sound emulation and YM2149 region wiring ported and validated"
+    subsystem: engine/dma_sound
+    state: validated
     summary: >
       atari.pas's DMA sound (digital sample playback: start/end/rate/loop/
-      mono registers, atari.pas:286,738-891) and STE DAC emulation are not
-      ported. Neither is the YM2149 memory-region wiring
-      (soundchip_readbyte/writebyte, atari.pas:520-565) that would connect
-      the 68000 bus to the already-ported engine/ay.c for SNDH's AY-chip
-      output - trivial in isolation (reuses engine/ay.c as-is, confirmed
-      by this milestone's oracle finding that atari.pas never implements
-      a separate YM2149 model) but not worth doing without the MFP/DMA-sound
-      context it's normally mixed alongside.
+      mono registers, atari.pas:286,738-891) is ported to
+      engine/dma_sound.c/.h: Ctrl_DMASnd's state-machine transition,
+      stedac_readbyte/writebyte's register decode (including the live
+      position-counter reads), and Atari_MixDMASnd's per-sample fetch/
+      scale/hold mixing logic - exposed as an m68k_bus callback region at
+      $FF8900-$FF89FF and wired into engine/ay.c's mixer via the new
+      on_mix_dma hook (MIG-0008). YM2149 region wiring ($FF8800-$FF88FF,
+      engine/src/atari_emulate.c's ym_region_read/write) dispatches
+      straight into the already-ported engine/ay.c/ay_chip, confirmed
+      (this milestone's oracle work) to match atari.pas's
+      soundchip_readbyte/writebyte, which never implements a separate
+      YM2149 model either.
     rationale: >
-      Same reasoning as MIG-0013 - DMA sound is interleaved with
-      Atari_Emulate's cycle-budget clamping (it clamps `min` to the next
-      DMA sample boundary), so it belongs in the same follow-on milestone
-      as MFP timers, not split out separately. engine/m68k_bus.c's
-      callback-region mechanism (tests/engine_smoke/test_m68k_bus.c's
-      test_callback_region) is already validated generically, so wiring in
-      the real YM2149/MFP/DMA-sound regions when that milestone happens is
-      mechanical, not a design risk.
+      Closed as planned. STE Microwire ($FF8922-25) is ported as the same
+      dummy bit-shifter stub the original uses (confirmed zero audio
+      effect in the original too - not a simplification). Not ported:
+      DMASndSkipMC68000Takts (confirmed, this milestone, called ONLY when
+      Seeking=True - Atari_SeekTo/SynthesizerSNDH's seek branch - never
+      during normal forward playback; deferred with the rest of seek/scrub
+      support, see MIG-0017) and the original's reentrant SynthesizerSNDH
+      flush inside the $FF8901 Ctrl write handler (atari.pas:817-828) -
+      render-loop orchestration, out of scope until a real render-loop
+      caller exists (MIG-0015).
     verification: >
-      Not applicable yet.
+      tests/oracle_diff's "dma" scenario: byte-identical mixed output
+      between atari.pas's real Atari_MixDMASnd (via
+      ay_emul/OracleHarness.pas's RunDMATest, driving the new Oracle_DMA_*
+      API added to atari.pas) and engine/dma_sound.c. Building this
+      scenario caught a real bug before it shipped: dma_sound_mix's
+      ay_freq parameter needs atari.pas's OWN AyFreq global (2000000.0,
+      Atari_SetDefault) - a completely different value from settings.pas's
+      AY_Freq (1773400, the ZX Spectrum's clock) despite the near-identical
+      name. tests/engine_smoke/test_atari.c/test_m68k_bus.c's
+      test_callback_region additionally cover the mechanism generically.
 
   - id: MIG-0015
-    title: "Atari_Emulate's cycle-budget/interrupt-scheduling loop not ported"
-    subsystem: engine/m68k_bus
-    state: behaviorally_incomplete
+    title: "Atari_Emulate's cycle-budget/interrupt-scheduling loop ported and validated"
+    subsystem: engine/atari_emulate
+    state: validated
     summary: >
       atari.pas's Atari_Emulate (atari.pas:1436-1523) - the per-tick driver
-      analogous to Z80's Z80_Step/MakeBufferAY loop - computes a bounded
+      analogous to Z80's Z80_Step/MakeBufferAY loop - is ported to
+      engine/atari_emulate.c's atari_emulate_step: computes a bounded
       cycle budget per call from the nearest upcoming event across VBL,
-      all 4 MFP timers, and DMA-sound sample boundaries, injects the VBL
-      interrupt (level 4, autovectored) on schedule, and calls
-      SynthesizerSNDH to mix output. Not ported; engine/m68k_bus.c exposes
-      only the bare exec(cycles)/interrupt-ack primitives this loop would
-      be built on top of.
+      all 4 MFP timers (mfp_emulate_timer), and DMA-sound sample
+      boundaries (dma_sound_next_boundary_cycles), executes exactly that
+      many 68000 cycles (m68k_bus_exec), injects the VBL interrupt on
+      schedule (level 4, autovectored, with the same accept-or-retry-with-
+      10%-slack fallback as the original), and flushes the AY mixer
+      (ay_synthesizer_ay - the SynthesizerSNDH equivalent) when DMA sound
+      is active.
     rationale: >
-      This is Players.pas/Phase-2-shaped orchestration work (the direct
-      analog of MakeBufferAY, deferred from the Z80/AY milestone for the
-      same reason), inseparable from MFP/DMA-sound (MIG-0013/0014) since
-      the cycle-budget computation reads their state directly. Belongs to
-      the same follow-on milestone as those two.
+      Closed for the scheduling logic itself. NOT wired to a real
+      render-loop caller (MakeBufferSNDH) or SNDH file loading - that
+      needs Players.pas (Phase 2) to exist first, the same reasoning that
+      left MakeBufferAY for later in the Z80/AY milestone. The original's
+      Starscream-32-bit-odometer renormalization (tripOdometer) is not
+      replicated - engine/atari_emulate.c accumulates a plain 64-bit cycle
+      counter with no realistic overflow risk, a documented, deliberate
+      simplification (see engine/include/ay_engine/atari_emulate.h).
     verification: >
-      Not applicable yet.
+      tests/engine_smoke/test_atari.c's test_atari_emulate_vbl_scheduling:
+      a full, real 68000 program (with an interrupt vector table entry and
+      handler) driven through 200 atari_emulate_step calls, confirming VBL
+      interrupts fire on schedule and are correctly serviced (99/99 fires
+      counted). See MIG-0013b for why this integration-level interrupt-
+      delivery test is self-consistency-only, not oracle-compared.
 
   - id: MIG-0016
     title: "SNDH file parsing/depacking not ported"
@@ -451,3 +530,25 @@ entries:
       specific to the 68000 core work done this milestone.
     verification: >
       Not applicable yet.
+
+  - id: MIG-0017
+    title: "Seek/scrub support not ported (Atari_Emulate_One_VBL, DMASndSkipMC68000Takts)"
+    subsystem: engine/atari_emulate
+    state: behaviorally_incomplete
+    summary: >
+      atari.pas's Atari_Emulate_One_VBL (atari.pas:1525-1550, a fast-forward
+      variant used only by Atari_SeekTo for scrubbing/seek-position UI) and
+      DMASndSkipMC68000Takts (atari.pas:317-354, confirmed this milestone
+      to be called ONLY when Seeking=True) are not ported. Neither is
+      Atari_SeekTo itself.
+    rationale: >
+      Not needed for core playback - confirmed by direct trace that both
+      are exclusively part of the seek/scrub code path, never the normal
+      forward-playback path this milestone's engine/atari_emulate.c
+      covers. Deferred to whenever seek/scrub UI is tackled (a GUI-adjacent
+      feature, later milestone territory regardless).
+    verification: >
+      Confirmed via grep: DMASndSkipMC68000Takts's only two call sites
+      (atari.pas:1605,1714) are both inside Seeking-guarded code
+      (Atari_SeekTo directly, and SynthesizerSNDH's `if Seeking then`
+      branch).

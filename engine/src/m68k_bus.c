@@ -136,3 +136,8 @@ uint32_t m68k_bus_get_reg(int reg) {
 void m68k_bus_set_reg(int reg, uint32_t value) {
   m68k_set_reg((m68k_register_t)reg, value);
 }
+
+void m68k_bus_set_irq(m68k_bus* bus, int level) {
+  g_active_bus = bus;
+  m68k_set_irq((unsigned int)level);
+}

@@ -89,4 +89,14 @@ int m68k_bus_exec(m68k_bus* bus, int cycles);
 uint32_t m68k_bus_get_reg(int reg);
 void m68k_bus_set_reg(int reg, uint32_t value);
 
+/* Asserts the 68000's IPL lines at `level` (0-7; 0 clears), mirroring
+ * Musashi's m68k_set_irq - the level-triggered counterpart to
+ * Starcpu.inc's per-call s68000interrupt(level,vector). The CPU services
+ * it (and consults `int_ack` for the vector) on its own at the next
+ * eligible instruction boundary during m68k_bus_exec - there is no
+ * separate "try now" call the way s68000interrupt is, since Musashi
+ * doesn't need one (see engine/mfp.h's file comment for the fuller
+ * rationale). */
+void m68k_bus_set_irq(m68k_bus* bus, int level);
+
 #endif /* AY_ENGINE_M68K_BUS_H */

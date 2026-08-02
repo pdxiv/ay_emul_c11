@@ -27,7 +27,7 @@ WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 status=0
-for scenario in zx cpc immediate m68k; do
+for scenario in zx cpc immediate m68k mfp dma; do
   AY_EMUL_ORACLE="$scenario" AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_$scenario.txt" "$ORACLE_BIN"
   ./dump_engine_state "$scenario" "$WORKDIR/engine_$scenario.txt"
   if cmp -s "$WORKDIR/oracle_$scenario.txt" "$WORKDIR/engine_$scenario.txt"; then

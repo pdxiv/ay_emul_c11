@@ -13,6 +13,7 @@ engine/third_party/z80/z80_tests
 tests/engine_smoke/test_z80_bus
 tests/engine_smoke/test_ay
 tests/engine_smoke/test_m68k_bus
+tests/engine_smoke/test_atari
 tests/oracle_diff/dump_engine_state
 
 # Musashi code-generates these from m68k_in.c at build time (see

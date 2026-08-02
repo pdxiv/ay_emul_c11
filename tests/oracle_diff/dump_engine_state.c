@@ -10,6 +10,8 @@
 #include "ay_engine/ay.h"
 #include "ay_engine/z80_bus.h"
 #include "ay_engine/m68k_bus.h"
+#include "ay_engine/mfp.h"
+#include "ay_engine/dma_sound.h"
 #include "m68k.h"
 
 typedef struct {
@@ -257,6 +259,79 @@ static void run_m68k(const char* out_path) {
   fclose(f);
 }
 
+/* Matches OracleHarness.pas's RunMFPTest exactly - see that procedure's
+ * comment for why IMRA is deliberately left at 0 (isolates the countdown/
+ * reload timing and the IPR-bit-set side effect from Starscream's
+ * immediate-delivery-and-auto-clear behavior, which engine/mfp.c's
+ * level-triggered/Musashi-driven design doesn't replicate - see
+ * engine/include/ay_engine/mfp.h's file comment and MIG-0013). */
+static void run_mfp(const char* out_path) {
+  mfp m;
+  mfp_init(&m);
+
+  mfp_write_byte_at(&m, 0xFFFA1F, 10, 0); /* TAD = 10 */
+  mfp_write_byte_at(&m, 0xFFFA19, 1, 0);  /* TACR mode 1 */
+  mfp_write_byte_at(&m, 0xFFFA07, 32, 0); /* IERA enable A */
+
+  int64_t next1 = mfp_emulate_timer(&m, 0, 1);
+  uint8_t ipa_before = mfp_read_byte_at(&m, 0xFFFA0B, 1);
+
+  int64_t next2 = mfp_emulate_timer(&m, 0, 130);
+  uint8_t ipa_after = mfp_read_byte_at(&m, 0xFFFA0B, 130);
+
+  FILE* f = fopen(out_path, "w");
+  fprintf(f, "%lld\n", (long long)next1);
+  fprintf(f, "%u\n", ipa_before);
+  fprintf(f, "%lld\n", (long long)next2);
+  fprintf(f, "%u\n", ipa_after);
+  fclose(f);
+}
+
+/* Matches OracleHarness.pas's RunDMATest exactly. */
+static void run_dma(const char* out_path) {
+  dma_sound d;
+  dma_sound_init(&d);
+
+  uint8_t mem[0x10000];
+  memset(mem, 0, sizeof(mem));
+  mem[0x1000] = (uint8_t)(int8_t)100;
+  mem[0x1001] = (uint8_t)(int8_t)-50;
+
+  dma_sound_write_byte_at(&d, 0xFF8903, 0x00, 0);
+  dma_sound_write_byte_at(&d, 0xFF8905, 0x10, 0);
+  dma_sound_write_byte_at(&d, 0xFF8907, 0x00, 0);
+  dma_sound_write_byte_at(&d, 0xFF890F, 0x00, 0);
+  dma_sound_write_byte_at(&d, 0xFF8911, 0x10, 0);
+  dma_sound_write_byte_at(&d, 0xFF8913, 0x10, 0);
+  dma_sound_write_byte_at(&d, 0xFF8921, 0x80, 0);
+  dma_sound_write_byte_at(&d, 0xFF8901, 0x01, 0);
+
+  int lev_l = 0, lev_r = 0;
+  int atari_dma_level = 128;
+  int i;
+  bool saw_nonzero = false;
+  for (i = 0; i < 2000; i++) {
+    /* Matches RunDMATest's loop: check play state (via the play field
+     * directly, mirroring Oracle_DMA_IsPlaying) before each mix call. */
+    if (!d.play) break;
+    /* AyFreq here is atari.pas's OWN global (Atari_MainClockFreqDef/16 =
+     * 2000000.0, set by Atari_SetDefault) - the Atari ST's AY/YM clock,
+     * NOT settings.pas's AY_Freq (ZX Spectrum's 1773400) which is a
+     * different unit-level global entirely despite the near-identical
+     * name. Mixing them up here is exactly the kind of bug this oracle
+     * comparison exists to catch. */
+    dma_sound_mix(&d, mem, sizeof(mem), atari_dma_level, 8000000.0,
+                  2000000.0, &lev_l, &lev_r);
+    if (lev_l != 0) saw_nonzero = true;
+  }
+
+  FILE* f = fopen(out_path, "w");
+  fprintf(f, "%d\n", lev_l);
+  fprintf(f, "%d\n", lev_r);
+  fprintf(f, "%d\n", saw_nonzero ? 1 : 0);
+  fclose(f);
+}
+
 int main(int argc, char** argv) {
   if (argc != 3) {
     fprintf(stderr, "usage: %s <zx|cpc|immediate|pcm> <output-path>\n", argv[0]);
@@ -272,6 +347,8 @@ int main(int argc, char** argv) {
   else if (strcmp(scenario, "pcm_filtered") == 0) run_pcm_filtered(out_path);
   else if (strcmp(scenario, "pcm8") == 0) run_pcm8(out_path);
   else if (strcmp(scenario, "m68k") == 0) run_m68k(out_path);
+  else if (strcmp(scenario, "mfp") == 0) run_mfp(out_path);
+  else if (strcmp(scenario, "dma") == 0) run_dma(out_path);
   else {
     fprintf(stderr, "unknown scenario '%s'\n", scenario);
     return 1;

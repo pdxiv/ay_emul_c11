@@ -10,7 +10,8 @@ INCLUDES = -Iinclude -Ithird_party/z80 -Ithird_party/musashi
 MUSASHI_DIR = third_party/musashi
 MUSASHI_GEN = $(MUSASHI_DIR)/m68kops.c $(MUSASHI_DIR)/m68kops.h
 
-SRC = src/ay.c src/z80_bus.c src/m68k_bus.c \
+SRC = src/ay.c src/z80_bus.c src/m68k_bus.c src/mfp.c src/dma_sound.c \
+      src/atari_emulate.c \
       third_party/z80/z80.c \
       $(MUSASHI_DIR)/m68kcpu.c $(MUSASHI_DIR)/m68kdasm.c \
       $(MUSASHI_DIR)/m68kops.c $(MUSASHI_DIR)/softfloat/softfloat.c

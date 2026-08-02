@@ -373,9 +373,7 @@ static void ay_chip_synthesizer_mixer_q(ay_chip* c, const ay_engine* e,
   int lev_l = e->beeper;
   int lev_r = lev_l;
   int k;
-  /* Atari_MixDMASnd(LevL,LevR) - no-op, Atari DMA mixing out of scope
-   * this milestone (MIG-0008); e->atari_dma_max is 0 so the level-table
-   * headroom computation already accounts for zero DMA contribution. */
+  if (e->on_mix_dma != NULL) e->on_mix_dma(e->on_mix_dma_userdata, &lev_l, &lev_r);
 
   k = 1;
   if (c->ton_en_a) k = c->ton_a;
@@ -425,7 +423,11 @@ static void ay_chip_synthesizer_mixer_q_mono(ay_chip* c, const ay_engine* e,
                                               int* level_l) {
   int lev = e->beeper;
   int k;
-  /* Atari_MixDMASnd - no-op, see stereo variant above. */
+  if (e->on_mix_dma != NULL) {
+    int dma_r = 0;
+    e->on_mix_dma(e->on_mix_dma_userdata, &lev, &dma_r);
+    lev += dma_r;
+  }
 
   k = 1;
   if (c->ton_en_a) k = c->ton_a;
@@ -576,6 +578,8 @@ void ay_engine_calculate_level_tables(ay_engine* e) {
     }
   }
   e->beeper_level = -(int)((double)e->beeper_max / l * r * k + 0.5);
+  /* AY.pas:1007 */
+  e->atari_dma_level = (int)((double)e->atari_dma_max / l * r * k + 0.5);
 }
 
 /* AY.pas:1058-1072, SynthesizerAY, cpu64/non-asm fallback (the only path

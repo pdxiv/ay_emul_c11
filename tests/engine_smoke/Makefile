@@ -6,7 +6,7 @@ LIB = $(ENGINE)/libayengine.a
 
 .PHONY: all clean
 
-all: test_z80_bus test_ay test_m68k_bus
+all: test_z80_bus test_ay test_m68k_bus test_atari
 
 $(LIB):
 	$(MAKE) -C $(ENGINE)
@@ -20,5 +20,8 @@ test_ay: test_ay.c $(LIB)
 test_m68k_bus: test_m68k_bus.c $(LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) test_m68k_bus.c $(LIB) -o $@ -lm
 
+test_atari: test_atari.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) test_atari.c $(LIB) -o $@ -lm
+
 clean:
-	rm -f test_z80_bus test_ay test_m68k_bus
+	rm -f test_z80_bus test_ay test_m68k_bus test_atari
