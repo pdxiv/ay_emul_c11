@@ -715,6 +715,36 @@ part of the codebase, the port is much lower-risk done in this order:
    bodies; `MainWin.pas` and `PlayList.pas` get no benefit from the
    generator and should be scoped as hand-design work from the start.
 
+### 8.1 The `ay_emul` submodule may be extended with oracle-harness diagnostics — never patched to match the port
+
+Step 1 above (and every later differential-testing step) depends on the
+`ay_emul` submodule being a trustworthy oracle: something the C11 port is
+checked *against*, not something adjusted to agree with the port. Two rules
+follow from that, and both matter enough to state explicitly rather than
+leave as an assumption:
+
+- **Permitted:** adding optional, self-contained diagnostic/test code to the
+  `ay_emul` submodule purely to make differential validation possible — for
+  example, a new unit that drives `Z80.pas`/`AY.pas`/etc. directly with
+  synthetic inputs and dumps register state or PCM to a file, wired in
+  behind an environment variable or command-line flag so normal use of the
+  program is completely unaffected. This is legitimate porting-support work,
+  not a compromise of the oracle: the original code paths being exercised
+  are untouched, only a new, additive entry point is added. Such changes are
+  committed to the submodule's own local git history so the work is
+  reproducible, but are not pushed upstream without a separate, explicit
+  decision to do so.
+- **Not permitted, under any circumstance:** changing what `Z80.pas`,
+  `AY.pas`, `Players.pas`, or any other original code path *computes*, in
+  order to make it agree with the C11 port. If a differential test reveals
+  a mismatch, the presumption is that the C11 port has a bug (or, per §7's
+  policy discussion elsewhere in this document, that a deliberate,
+  documented, and separately-justified fidelity improvement was made and
+  recorded as migration debt) — never that the original Pascal behavior
+  should be edited to close the gap. Doing so would silently destroy the
+  oracle's value for every future comparison, and defeats the entire
+  purpose of differential testing.
+
 ## 9. On tracking this as migration debt
 
 Per the porting conventions this workspace uses for LLM-assisted ports: if

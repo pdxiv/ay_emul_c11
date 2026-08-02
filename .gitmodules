@@ -1,3 +1,6 @@
 [submodule "ay_emul"]
 	path = ay_emul
 	url = git@github.com:pdxiv/ay_emul.git
+[submodule "engine/third_party/z80"]
+	path = engine/third_party/z80
+	url = https://github.com/superzazu/z80.git

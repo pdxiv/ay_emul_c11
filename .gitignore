@@ -1,0 +1,26 @@
+# Build artifacts (C11 engine, tests, vendored third_party/z80).
+# Note: the `ay_emul` submodule is a separate git repository and manages its
+# own .gitignore (it deliberately tracks some prebuilt object files - see
+# BUILDING_UBUNTU20.04.md - do not add rules here targeting its contents).
+*.o
+*.a
+*.or
+
+# Test/tool binaries produced by the Makefiles/scripts under engine/ and
+# tests/ - named explicitly rather than by a broad pattern, since these
+# directories also contain same-named *.c sources.
+engine/third_party/z80/z80_tests
+tests/engine_smoke/test_z80_bus
+tests/engine_smoke/test_ay
+tests/oracle_diff/dump_engine_state
+
+# Editor/OS cruft
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code: personal/session-local settings (tool-permission approvals,
+# machine-specific). .claude/settings.json (no ".local"), if present, is
+# shared project config and should stay tracked.
+.claude/settings.local.json

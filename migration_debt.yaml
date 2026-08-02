@@ -1,0 +1,322 @@
+# Machine-checkable migration-debt ledger for the ay_emul -> C11 port.
+#
+# Per this workspace's global LLM-porting invariants: every stub, TODO,
+# omitted branch, or approximated behavior must be recorded here with a
+# MIG-#### id, not silently implied. States:
+#   translated             - mechanically ported and compiles
+#   behaviorally_incomplete - runs, but known behavior is missing/approximated
+#   validated               - behavior checked with tests, differential
+#                             checks, or documented manual verification
+#
+# This file should be updated as work proceeds. An item may only move to
+# `validated` with a concrete verification method recorded against it.
+
+schema_version: 1
+
+entries:
+  - id: MIG-0001
+    title: "Z80 IM0/IM1 interrupt-acceptance timing improves on the original"
+    subsystem: engine/z80_bus
+    state: validated
+    summary: >
+      The live (actually-compiled) Z80.pas core (Z80.pas:21027-21045;
+      the {$ifdef Z80Emu_ASM} copy at Z80.pas:10810-10852 is dead code,
+      see tests/zexall/FIDELITY_GATE.md) collapses IM0 and IM1 into a single
+      hardcoded 12 T-state RST $38, and never models true IM0
+      arbitrary-instruction-from-data-bus execution. superzazu/z80
+      implements real IM0 (via z80_gen_int(z, data)) and a real 13 T-state
+      IM1. This port uses superzazu/z80's accurate timing rather than
+      reproducing the original's simplification.
+    rationale: >
+      Decided intentional improvement, not a gap: Players.pas only ever
+      drives this core in IM1-equivalent mode for the in-scope ZX/CPC AY
+      machines (confirmed by exploration of Players.pas's Z80/AY
+      orchestration - no in-scope format uses IM0). Recording this so the
+      1-T-state timing difference from the original Pascal binary is never
+      mistaken for an unverified regression during later differential
+      testing against that binary.
+    verification: >
+      Confirmed by direct source comparison (Z80.pas:21027-21045 vs
+      superzazu/z80's z80.c interrupt handling) plus superzazu/z80 passing
+      ZEXALL/ZEXDOC (tests/zexall/FIDELITY_GATE.md), which exercise
+      interrupt-adjacent timing extensively. No live differential harness
+      against a built Ay_Emul binary was required for this specific item.
+
+  - id: MIG-0002
+    title: "Fidelity-gate risk re-scoped: PORTING_TO_C11_LINUX.md §3.1's asm-block risk does not apply to the shipping Linux binary"
+    subsystem: engine/z80_bus
+    state: validated
+    summary: >
+      PORTING_TO_C11_LINUX.md §3.1 frames Z80.pas's 238 inline x86 asm blocks
+      (real-EFLAGS-derived undocumented flags) as the port's single highest
+      technical risk. Direct inspection shows this entire code path is gated
+      by {$ifdef Z80Emu_ASM}, which is never defined anywhere in this
+      checkout (Ay_Emul.lpi, Ay_Emul.lpr, Z80.pas itself) - it is dead code
+      in every buildable configuration. The live {$else Z80Emu_noASM} branch
+      (Z80.pas:10854-22052) has its own small asm-helper set
+      (Z80.pas:10869-10983) additionally gated by {$ifdef debugz80}, also
+      never defined - also dead. The actual live undocumented-flag logic is
+      plain Pascal bit arithmetic mirroring result bits 3/5 into XF/YF
+      (e.g. Z80.pas:11296, :11655), the same standard algorithm
+      superzazu/z80 implements.
+    rationale: >
+      Not a debt to resolve - a correction to the risk assessment recorded
+      here so future sessions don't re-derive it or assume the asm needs
+      individual hand-verification. See
+      tests/zexall/FIDELITY_GATE.md for full detail.
+    verification: >
+      Direct source read of Z80.pas's conditional-compilation guards and
+      grep for both {$define Z80Emu_ASM} and {$define debugz80} across the
+      whole ay_emul submodule (zero hits for either). Corroborated by
+      superzazu/z80 passing ZEXALL/ZEXDOC with zero cycle-count diff
+      (tests/zexall/FIDELITY_GATE.md).
+
+  - id: MIG-0003
+    title: "AY port-decode protocols limited to ZX and CPC variants"
+    subsystem: engine/z80_bus
+    state: validated
+    summary: >
+      engine/z80_bus.c implements only the two AY port-decode protocols
+      Z80.pas's live code implements (ZX-style $FFFD/$BFFD port decode and
+      CPC-style PPI/PSG-select protocol via ports $F4/$F6), matching
+      Z80.pas:10986-11113 (live noASM copy) exactly - not a narrowing, this
+      is the full set the original supports.
+    rationale: >
+      Confirmed complete and correct against the original, not just
+      internally consistent.
+    verification: >
+      tests/oracle_diff/run_diff.sh drives the SAME synthetic ZX and CPC
+      OUT (C),A instruction sequences through both the real Z80.pas/AY.pas
+      (via ay_emul/OracleHarness.pas, an optional diagnostic entry point
+      added and committed to the submodule's own local git history for
+      exactly this purpose) and engine/z80_bus.c + engine/ay.c, and
+      byte-compares the resulting AY register state. Both the "zx" and
+      "cpc" scenarios pass with identical register values.
+
+  - id: MIG-0004
+    title: "AY.pas DAC table alternates (V_Soft, Lion17 YM tables) not carried over"
+    subsystem: engine/ay
+    state: behaviorally_incomplete
+    summary: >
+      AY.pas:19-33 defines the live Amplitudes_AY table (Hacker KAY, 16
+      entries, used) plus several alternate/commented-out tables from other
+      authors (V_Soft, Lion17 32-entry YM variants) that are dead code in
+      the original (never selected by any code path). engine/ay.c ports only
+      the live table, verbatim.
+    rationale: >
+      Matches original behavior exactly (the alternates are unreachable in
+      the Pascal source too) - not a fidelity gap against the original. Kept
+      as an open entry only because if a later milestone wants to expose a
+      user-selectable DAC-table option (a new feature, not present in the
+      original), the alternate tables would need to be ported at that point.
+    verification: >
+      Confirmed via direct read of AY.pas:19-33 - alternate tables are
+      commented out or unreferenced by any live code path.
+
+  - id: MIG-0005
+    title: "Differential validation against original Ay_Emul binary"
+    subsystem: engine
+    state: validated
+    summary: >
+      engine/z80_bus.c and engine/ay.c are differentially validated against
+      the ORIGINAL Pascal Z80.pas/AY.pas (not just tests/engine_smoke's
+      self-consistency checks) via tests/oracle_diff/run_diff.sh, which
+      drives synthetic Z80/AY instruction and register sequences through
+      both implementations and byte-compares register state and PCM output.
+      All 6 scenarios pass: zx, cpc, immediate (register-level), and pcm,
+      pcm_filtered, pcm8 (PCM-level, byte-identical output).
+    rationale: >
+      This closes the CPU/port-decode/mixer-logic scope of differential
+      validation this milestone set out to achieve. It does NOT cover real
+      chiptune **file** parsing (no format-parser exists in engine/ yet -
+      Players.pas is a later milestone) or real-world sample-rate/AY-clock
+      calibration end-to-end (the pcm/pcm_filtered/pcm8 scenarios use
+      directly-injected register writes and a simplified, deterministic
+      tick-rate setup, not Players.pas's MakeBufferAY loop) - that remains
+      open for the Players.pas milestone, tracked separately if it surfaces
+      new gaps.
+    verification: >
+      tests/oracle_diff/run_diff.sh (all 6 scenarios PASS). The oracle
+      harness itself (ay_emul/OracleHarness.pas) is committed to the
+      ay_emul submodule's own local git history (not pushed upstream) as an
+      optional, env-var-gated diagnostic entry point that leaves normal use
+      of that program unaffected.
+
+  - id: MIG-0006
+    title: "superzazu/z80's port_in/port_out only expose the low 8 bits of the port"
+    subsystem: engine/z80_bus
+    state: validated
+    summary: >
+      superzazu/z80's port_in/port_out callbacks pass only z->c (for the
+      ED-prefixed IN r,(C)/OUT (C),r family) or an immediate operand byte
+      (for IN A,(n)/OUT (n),A), never the full 16-bit port real Z80.pas
+      decode logic needs (confirmed: PortMask=$c002 distinguishes
+      $FFFD/$BFFD by bit 14, which lives in B, not C). Worked around by
+      pre-decoding the next opcode at z80_bus_step() time
+      (predecode_next_port_op) to know whether the upcoming port op is the
+      BC-indirect form (reconstruct high byte from z->b) or the immediate
+      form (reconstruct from z->a), since data==z->a coincide for the
+      immediate OUT (n),A case.
+    rationale: >
+      This is architecturally the only way to recover the missing byte
+      from superzazu/z80's callback shape without patching the vendored
+      library - the z80* struct passed to the callback exposes the full
+      register file, so reconstruction is exact, not approximated, for the
+      BC-indirect and immediate-A forms. Real AY-chiptune code overwhelmingly
+      uses the BC-indirect form (LD BC,port:OUT (C),A) for exactly this
+      reason (immediate OUT (n),A cannot address a 16-bit AY port
+      meaningfully) - see MIG-0006b below for the one remaining edge case.
+    verification: >
+      tests/engine_smoke/test_z80_bus.c's test_zx_protocol/
+      test_cpc_protocol_explicit exercise the BC-indirect form end-to-end
+      through real Z80 OUT (C),A instructions and confirm correct
+      register/value pairs reach on_ay_write.
+
+  - id: MIG-0006b
+    title: "Immediate OUT (n),A port reconstruction validated; IN A,(n) and real-file usage still open"
+    subsystem: engine/z80_bus
+    state: behaviorally_incomplete
+    summary: >
+      reconstruct_port()'s use of z->a as the high byte for the immediate
+      form is now differentially validated for OUT (n),A specifically
+      (tests/oracle_diff's "immediate" scenario: select register 9 via the
+      BC-indirect form, then write it via `LD A,$BF: OUT ($FD),A` hitting
+      port $BFFD - oracle and engine agree byte-for-byte, register 9 ends
+      up 31 (0x1F) in both, i.e. AY.pas's own SetAmplB 5-bit register mask
+      applied to $BF). Writing this test also confirmed by direct
+      construction why the immediate form can't select an arbitrary
+      register via $FFFD (A supplies both the port high byte and the
+      written data simultaneously - $FF is not a valid 0..13 register
+      index) - this is a structural property of the hardware/protocol, not
+      an engine limitation. Still open: IN A,(n) specifically (no test),
+      and confirming no real in-scope chiptune file ever uses the immediate
+      form (still needs a real-file corpus - Players.pas milestone).
+    rationale: >
+      Meaningfully de-risked but not fully closed - the one case that
+      matters most (OUT (n),A, since that's the only immediate-form access
+      that could plausibly appear in real code) is now verified against the
+      original; IN A,(n) and real-file confirmation remain for the
+      Players.pas milestone's real-file differential corpus.
+    verification: >
+      tests/oracle_diff/run_diff.sh's "immediate" scenario passes
+      (oracle and engine registers identical).
+
+  - id: MIG-0007
+    title: "Turbosound / dual-chip (TSMode) support - redirected to the future tracker-format-player milestone"
+    subsystem: engine/ay
+    state: behaviorally_incomplete
+    summary: >
+      AY.pas's SoundChip is a 2-element array and Synthesizer_Stereo16 etc.
+      conditionally mix a second chip when TSMode is set (dual-AY
+      "Turbosound" hardware support). engine/ay.c ports only SoundChip[0]
+      (single chip) - see ay.h. Investigated this milestone to see whether
+      it could be closed alongside the other AY.pas gaps; it cannot be, for
+      a structural reason, not a scoping choice: TSMode is set ONLY by
+      Players.pas's tracker/module-replayer subsystem (PT3 dual-file
+      detection, Players.pas:2665-2686) - confirmed zero references to
+      TSMode or SoundChip[1] anywhere in Z80.pas. The real hardware/
+      Z80-OUT-port path this milestone's engine/ covers never drives a
+      second chip, in the original either.
+    rationale: >
+      Adding a second ay_chip + mixer-loop flag to engine/ay.c now would be
+      unvalidatable busywork - nothing in this milestone's scope could ever
+      set ts_mode, so there would be no way to test it against the oracle.
+      Genuine Turbosound support belongs entirely to the future
+      tracker-format-player milestone, alongside the register-feed logic
+      (PT3_Get_Registers et al.) it's inseparable from - tracked here so
+      that milestone's plan picks it up rather than rediscovering this.
+    verification: >
+      Confirmed via grep across the whole ay_emul submodule: TSMode and
+      SoundChip[1] appear only in AY.pas (mixer-side consumption) and
+      Players.pas's tracker-format code (the only place either is ever
+      set) - never in Z80.pas.
+
+  - id: MIG-0008
+    title: "Atari DMA sound mixing (Atari_MixDMASnd) stubbed as a no-op"
+    subsystem: engine/ay
+    state: behaviorally_incomplete
+    summary: >
+      AY.pas's Synthesizer_Mixer_Q/_Mono call Atari_MixDMASnd(LevL,LevR)
+      (atari.pas) to mix in Atari ST DMA sample playback alongside the AY
+      chip's own output. engine/ay.c's ay_chip_synthesizer_mixer_q(_mono)
+      omits this call entirely; atari_dma_max defaults to 0 so the
+      level-table headroom computation (Calculate_Level_Tables) already
+      accounts for zero DMA contribution consistently.
+    rationale: >
+      Atari ST / 68000 support (Musashi core, atari.pas, sndh.pas) is an
+      entire separate milestone per the approved plan's phased order - not
+      something to stub badly here, just explicitly not present yet.
+    verification: >
+      Not applicable - no Atari-format file exercises this path yet.
+
+  - id: MIG-0009
+    title: "8-bit PCM output (Synthesizer_Stereo8/Mono8) ported"
+    subsystem: engine/ay
+    state: validated
+    summary: >
+      AY.pas's Synthesizer_Stereo8/Mono8 (8-bit unsigned PCM output,
+      AY.pas:711-770,857-902) and Interpolator8/Averager8 are now ported to
+      engine/ay.c (ay_synthesizer_stereo8/mono8), mirroring the already-
+      ported 16-bit paths. e->buf is now an untyped void* (matching AY.pas's
+      untyped BufP, cast via PS16/PM16/PS8/PM8), written as int16_t or
+      uint8_t depending on which Synthesizer_* variant is called.
+    rationale: >
+      Closed as planned - mechanical extension, low risk, now differentially
+      validated rather than just unit-tested.
+    verification: >
+      tests/engine_smoke/test_ay.c's test_8bit_output_is_audible passes
+      (self-consistency). tests/oracle_diff/run_diff.sh's "pcm8" scenario
+      passes: byte-identical output against the real Synthesizer_Stereo8
+      via ay_emul/OracleHarness.pas's RunPCM8Test.
+
+  - id: MIG-0010
+    title: "OutZXConverter/OutCPCConverter (register-write export recording) not ported"
+    subsystem: engine/z80_bus
+    state: behaviorally_incomplete
+    summary: >
+      Z80.pas:11141-11183 (live noASM branch) defines OutCPCConverter (and
+      an analogous OutZXConverter) - alternate OUT-port handlers used only
+      when Convs.pas is recording AY register writes to an export file
+      format (VTX/PSG/etc converters), not during normal audio playback.
+      Not ported.
+    rationale: >
+      Convs.pas's export converters are their own later milestone (the
+      approved plan's scope is playback + WAV export of already-rendered
+      PCM, not register-write-log export formats) - this is an explicit,
+      tracked gap, not a silent omission.
+    verification: >
+      Not applicable yet.
+
+  - id: MIG-0011
+    title: "IsFilt/Filt_K FIR filter coefficients ported and validated"
+    subsystem: engine/ay
+    state: validated
+    summary: >
+      AY.pas's filter-coefficient design (MainWin.pas:5073-5168,
+      TFrmMain.CalcFiltKoefs/SetFilter - a Hamming-windowed-sinc lowpass
+      FIR, found in MainWin.pas rather than mixerctl.pas/digsound.pas as
+      first guessed) is now ported as ay_engine_set_filter(engine,
+      filter_quality, ay_freq, sample_rate) in engine/ay.c, including the
+      CPU-budget tap-count cap and the disable-if-SampleRate>=AY_Freq/8
+      short-circuit. filt_xl/filt_xr are now dynamically allocated to match
+      (ay_engine_free_filter frees them). ay_engine_init() still defaults
+      is_filt=-1 (unfiltered) until a caller explicitly calls
+      ay_engine_set_filter - a deliberate, documented default (see ay.h),
+      since AY.pas's own IsFilt=1 default assumes SetFilter has already run
+      at least once (which happens automatically in the original's app
+      startup, not automatically here).
+    rationale: >
+      Closed - the algorithm itself has no GUI dependency even though its
+      call sites live in MainWin.pas, confirmed by porting it as a pure
+      function and validating against the original.
+    verification: >
+      tests/oracle_diff/run_diff.sh's "pcm_filtered" scenario passes:
+      byte-identical filtered PCM output against ay_emul/OracleHarness.pas's
+      RunPCMFilteredTest. Note that harness replicates CalcFiltKoefs's
+      formula directly rather than calling the real TFrmMain method (which
+      also touches FrmMixer.Label13.Caption and digsoundloop_catch/release,
+      needing a live instantiated GUI this harness avoids) - both engine/ay.c
+      and the harness are independent transcriptions of the same original
+      source lines, so their agreement still meaningfully cross-checks the
+      translation, though it is one step short of calling the shipped code
+      path verbatim.

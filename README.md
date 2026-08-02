@@ -8,7 +8,9 @@ Planning stage. No code has been ported yet — this repository currently contai
 
 ## Source
 
-The full original Object Pascal program is included as the [`ay_emul`](ay_emul/) git submodule (`git@github.com:pdxiv/ay_emul.git`). Clone with `git submodule update --init` (or `git clone --recurse-submodules`) to fetch it — it's the source of truth referenced throughout PORTING_TO_C11_LINUX.md.
+The full original Object Pascal program is included as the [`ay_emul`](ay_emul/) git submodule (`git@github.com:pdxiv/ay_emul.git`). Clone with `git submodule update --init` (or `git clone --recurse-submodules`) to fetch it — it's the source of truth referenced throughout PORTING_TO_C11_LINUX.md, and the oracle every differential test in this port checks against.
+
+The submodule may be extended with optional, additive oracle-harness diagnostic code (e.g. a new unit that drives the original engine directly with synthetic inputs and dumps state for comparison against the C11 port, gated behind an environment variable so normal use of the program is unaffected) — this is legitimate porting-support work. It must never be edited to change what the original code *computes* in order to make it agree with the C11 port; see PORTING_TO_C11_LINUX.md §8.1 for the full policy. If the two disagree, the presumption is a bug in the port, not the oracle.
 
 ## Scope
 
