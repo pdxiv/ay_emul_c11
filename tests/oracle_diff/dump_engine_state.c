@@ -9,6 +9,8 @@
 
 #include "ay_engine/ay.h"
 #include "ay_engine/z80_bus.h"
+#include "ay_engine/m68k_bus.h"
+#include "m68k.h"
 
 typedef struct {
   uint8_t reg;
@@ -220,6 +222,41 @@ static void run_pcm8(const char* out_path) {
   fclose(f);
 }
 
+/* Matches OracleHarness.pas's RunM68kTest exactly: same reset vectors,
+ * same MOVEQ/MOVEQ/ADD.L/MOVE.L/STOP program, same flat memory region -
+ * no byte-swap transform needed on this side (see m68k_bus.c's file
+ * comment: words are always composed from big-endian byte reads). */
+static void run_m68k(const char* out_path) {
+  static uint8_t mem[0x10000];
+  memset(mem, 0, sizeof(mem));
+
+  mem[0] = 0x00; mem[1] = 0x00; mem[2] = 0x10; mem[3] = 0x00;
+  mem[4] = 0x00; mem[5] = 0x00; mem[6] = 0x04; mem[7] = 0x00;
+
+  mem[0x400] = 0x70; mem[0x401] = 0x05;
+  mem[0x402] = 0x72; mem[0x403] = 0x07;
+  mem[0x404] = 0xD0; mem[0x405] = 0x81;
+  mem[0x406] = 0x23; mem[0x407] = 0xC0; mem[0x408] = 0x00; mem[0x409] = 0x00;
+  mem[0x40A] = 0x20; mem[0x40B] = 0x00;
+  mem[0x40C] = 0x4E; mem[0x40D] = 0x72; mem[0x40E] = 0x27; mem[0x40F] = 0x00;
+
+  m68k_bus bus;
+  m68k_bus_init(&bus);
+  m68k_bus_add_flat_region(&bus, 0, sizeof(mem) - 1, mem);
+  m68k_bus_activate(&bus);
+  m68k_bus_reset(&bus);
+  m68k_bus_exec(&bus, 200);
+
+  uint32_t written = ((uint32_t)mem[0x2000] << 24) | ((uint32_t)mem[0x2001] << 16) |
+                      ((uint32_t)mem[0x2002] << 8) | mem[0x2003];
+
+  FILE* f = fopen(out_path, "w");
+  fprintf(f, "%u\n", m68k_bus_get_reg(M68K_REG_D0));
+  fprintf(f, "%u\n", m68k_bus_get_reg(M68K_REG_PC));
+  fprintf(f, "%u\n", written);
+  fclose(f);
+}
+
 int main(int argc, char** argv) {
   if (argc != 3) {
     fprintf(stderr, "usage: %s <zx|cpc|immediate|pcm> <output-path>\n", argv[0]);
@@ -234,6 +271,7 @@ int main(int argc, char** argv) {
   else if (strcmp(scenario, "pcm") == 0) run_pcm(out_path);
   else if (strcmp(scenario, "pcm_filtered") == 0) run_pcm_filtered(out_path);
   else if (strcmp(scenario, "pcm8") == 0) run_pcm8(out_path);
+  else if (strcmp(scenario, "m68k") == 0) run_m68k(out_path);
   else {
     fprintf(stderr, "unknown scenario '%s'\n", scenario);
     return 1;

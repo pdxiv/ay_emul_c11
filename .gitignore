@@ -12,7 +12,14 @@
 engine/third_party/z80/z80_tests
 tests/engine_smoke/test_z80_bus
 tests/engine_smoke/test_ay
+tests/engine_smoke/test_m68k_bus
 tests/oracle_diff/dump_engine_state
+
+# Musashi code-generates these from m68k_in.c at build time (see
+# engine/Makefile) - not checked into the vendored submodule.
+engine/third_party/musashi/m68kops.c
+engine/third_party/musashi/m68kops.h
+engine/third_party/musashi/m68kmake
 
 # Editor/OS cruft
 *.swp

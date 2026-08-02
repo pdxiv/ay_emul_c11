@@ -4,3 +4,6 @@
 [submodule "engine/third_party/z80"]
 	path = engine/third_party/z80
 	url = https://github.com/superzazu/z80.git
+[submodule "engine/third_party/musashi"]
+	path = engine/third_party/musashi
+	url = https://github.com/kstenerud/Musashi.git

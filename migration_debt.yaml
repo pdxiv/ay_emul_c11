@@ -243,9 +243,10 @@ entries:
       level-table headroom computation (Calculate_Level_Tables) already
       accounts for zero DMA contribution consistently.
     rationale: >
-      Atari ST / 68000 support (Musashi core, atari.pas, sndh.pas) is an
-      entire separate milestone per the approved plan's phased order - not
-      something to stub badly here, just explicitly not present yet.
+      The 68000 core itself is now ported (MIG-0012), but DMA sound
+      emulation (MIG-0013) - the thing that would actually feed
+      Atari_MixDMASnd real sample data - is its own follow-on milestone,
+      not something to stub badly here.
     verification: >
       Not applicable - no Atari-format file exercises this path yet.
 
@@ -320,3 +321,133 @@ entries:
       source lines, so their agreement still meaningfully cross-checks the
       translation, though it is one step short of calling the shipped code
       path verbatim.
+
+  - id: MIG-0012
+    title: "Musashi 68000 core integrated and validated against the original's precompiled Starscream core"
+    subsystem: engine/m68k_bus
+    state: validated
+    summary: >
+      engine/m68k_bus.c wraps Musashi (engine/third_party/musashi,
+      MIT-licensed, replacing the original's precompiled "Starscream"
+      object file per PORTING_TO_C11_LINUX.md §3.2/§7.1) with a generic
+      address-range memory-region mechanism (flat buffers or read/write
+      callbacks, mirroring Starcpu.inc's TSTARSCREAM_DATAREGION/
+      PROGRAMREGION) and an interrupt-ack hook matching
+      s68000interrupt(level,vector)'s contract. Musashi's core memory
+      hooks (m68k_read_memory_8/16/32 etc) are fixed-name, link-time
+      functions, not a runtime callback struct - Musashi is a singleton
+      core; the adapter holds one process-wide "active bus" pointer
+      (acceptable since ay_emul never runs two 68000s concurrently).
+    rationale: >
+      No ZEXALL-equivalent test suite exists for 68000 cores/Musashi (it
+      cites long-term use in MAME as its validation pedigree, and ships
+      only an internal test/ harness needing a cross-toolchain to
+      regenerate). The oracle-differential technique already built and
+      proven for Z80/AY this session filled that gap directly: the
+      original's Starcpu64L.o is still linked into the existing app and
+      was exercised via a new ay_emul/OracleHarness.pas scenario (m68k),
+      driving both it and engine/m68k_bus.c with an identical synthetic
+      68000 program (MOVEQ/MOVEQ/ADD.L/MOVE.L/STOP) and comparing register
+      state, PC, and a memory write. Building this surfaced and confirmed
+      a real Starscream implementation detail: its direct-offset memory
+      access (used for instruction fetch, which has no callback
+      alternative) requires memory pre-transformed by a 16-bit byte swap
+      (atari.pas's IntelizeMemory, a speed optimization) - the oracle
+      harness replicates that transform; engine/m68k_bus.c needs no such
+      transform since it always composes words from individual big-endian
+      byte reads. Per PORTING_TO_C11_LINUX.md §8.1, Starcpu64L.o is used
+      here strictly as a local test oracle, never linked into or
+      redistributed with the C11 port itself - the port uses Musashi
+      exclusively.
+    verification: >
+      tests/oracle_diff/run_diff.sh's "m68k" scenario passes: identical
+      D0, PC, and memory-write results between the real Starscream core
+      and engine/m68k_bus.c. tests/engine_smoke/test_m68k_bus.c additionally
+      covers flat-memory writes and the callback-region mechanism
+      (self-consistency, not yet exercised against the oracle, since no
+      real hardware register is wired up this milestone - see MIG-0014).
+
+  - id: MIG-0013
+    title: "MFP timer emulation not ported"
+    subsystem: engine/m68k_bus
+    state: behaviorally_incomplete
+    summary: >
+      atari.pas's EmulateTimer/MFP_Registers (atari.pas:111-160,356-491)
+      emulate the Atari ST's MFP68901's four timers (A-D), which drive
+      SNDH's common playback frequencies (sndh.pas's TPlayGen: GenTA..GenTD)
+      and gate interrupts into the 68000 core. Not ported.
+    rationale: >
+      Confirmed (this milestone's exploration) that MFP timer scheduling is
+      interleaved with the CPU exec loop itself (Atari_Emulate computes a
+      cycle budget bounded by the nearest upcoming MFP timer event before
+      each s68000exec call) - real, hand-ported hardware emulation on the
+      same scale as the AY.pas port, not a small extension of the bare CPU
+      core. Deliberately left to its own follow-on milestone rather than
+      attempted partially alongside the CPU core.
+    verification: >
+      Not applicable yet - no Atari-format file exercises this path.
+
+  - id: MIG-0014
+    title: "DMA sound / STE DAC emulation, and YM2149 region wiring, not ported"
+    subsystem: engine/m68k_bus
+    state: behaviorally_incomplete
+    summary: >
+      atari.pas's DMA sound (digital sample playback: start/end/rate/loop/
+      mono registers, atari.pas:286,738-891) and STE DAC emulation are not
+      ported. Neither is the YM2149 memory-region wiring
+      (soundchip_readbyte/writebyte, atari.pas:520-565) that would connect
+      the 68000 bus to the already-ported engine/ay.c for SNDH's AY-chip
+      output - trivial in isolation (reuses engine/ay.c as-is, confirmed
+      by this milestone's oracle finding that atari.pas never implements
+      a separate YM2149 model) but not worth doing without the MFP/DMA-sound
+      context it's normally mixed alongside.
+    rationale: >
+      Same reasoning as MIG-0013 - DMA sound is interleaved with
+      Atari_Emulate's cycle-budget clamping (it clamps `min` to the next
+      DMA sample boundary), so it belongs in the same follow-on milestone
+      as MFP timers, not split out separately. engine/m68k_bus.c's
+      callback-region mechanism (tests/engine_smoke/test_m68k_bus.c's
+      test_callback_region) is already validated generically, so wiring in
+      the real YM2149/MFP/DMA-sound regions when that milestone happens is
+      mechanical, not a design risk.
+    verification: >
+      Not applicable yet.
+
+  - id: MIG-0015
+    title: "Atari_Emulate's cycle-budget/interrupt-scheduling loop not ported"
+    subsystem: engine/m68k_bus
+    state: behaviorally_incomplete
+    summary: >
+      atari.pas's Atari_Emulate (atari.pas:1436-1523) - the per-tick driver
+      analogous to Z80's Z80_Step/MakeBufferAY loop - computes a bounded
+      cycle budget per call from the nearest upcoming event across VBL,
+      all 4 MFP timers, and DMA-sound sample boundaries, injects the VBL
+      interrupt (level 4, autovectored) on schedule, and calls
+      SynthesizerSNDH to mix output. Not ported; engine/m68k_bus.c exposes
+      only the bare exec(cycles)/interrupt-ack primitives this loop would
+      be built on top of.
+    rationale: >
+      This is Players.pas/Phase-2-shaped orchestration work (the direct
+      analog of MakeBufferAY, deferred from the Z80/AY milestone for the
+      same reason), inseparable from MFP/DMA-sound (MIG-0013/0014) since
+      the cycle-budget computation reads their state directly. Belongs to
+      the same follow-on milestone as those two.
+    verification: >
+      Not applicable yet.
+
+  - id: MIG-0016
+    title: "SNDH file parsing/depacking not ported"
+    subsystem: engine
+    state: behaviorally_incomplete
+    summary: >
+      sndh.pas (838 lines: sndh_UnpackFile, an "Ice" LZ-style depacker, and
+      sndh_ExtractTextInfo, metadata/play-time extraction including an
+      Atari-codepage-to-UTF8 table and a lookup into SNDHTimeDB) contains no
+      CPU/hardware emulation at all - confirmed by this milestone's
+      exploration. Not ported.
+    rationale: >
+      Players.pas/Phase-2 format-parser territory, same bucket as the
+      Z80-side chiptune formats deferred from the Z80/AY milestone - not
+      specific to the 68000 core work done this milestone.
+    verification: >
+      Not applicable yet.
