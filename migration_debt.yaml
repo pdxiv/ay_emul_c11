@@ -552,3 +552,407 @@ entries:
       (atari.pas:1605,1714) are both inside Seeking-guarded code
       (Atari_SeekTo directly, and SynthesizerSNDH's `if Seeking then`
       branch).
+
+  - id: MIG-0018
+    title: "Real .ay file loading/playback (Phase 2 begins) - small register-write timing offset vs the original"
+    subsystem: engine/ay_file
+    state: behaviorally_incomplete
+    summary: >
+      engine/src/ay_file.c ports the real Sergey Bulba/FUXOFT .ay file
+      format (FT.AY, TypeID "EMUL" only - AMAD/ST11 are different,
+      unrelated formats and are rejected): the header/song-table lookup
+      (Players.pas:2915-2949/7132-7236), the ZRAM/register setup including
+      the DumpIM1/DumpIM2 trampoline injection (Players.pas:3926-4008), and
+      a MakeBufferAY/AY_Get_Registers-equivalent playback loop
+      (ay_file_make_buffer), all built on the already-validated
+      engine/z80_bus.c + engine/ay.c core (MIG-0001/0003/0005/0006b).
+      Loads and plays songs/cpc/Discmac20_0.ay correctly end-to-end
+      (tests/engine_smoke/test_ay_file.c: 102400 sample frames rendered,
+      audible, no crash). A new oracle scenario (ay_file, in
+      OracleHarness.pas's RunAYFileTest + dump_engine_state.c's
+      run_ay_file) drives this exact file through both the real
+      Players.pas-derived code path and the C port and byte-compares 2048
+      stereo16 sample frames of output.
+
+      Result: byte-identical for the entire silent lead-in before the
+      first interrupt-driven AY register write (samples 0-987, i.e. bytes
+      0-3951 of 8192 - the whole first Z80 frame). Diverges after that by
+      a small, bounded timing offset: manual trace comparison (raw Z80_Step
+      PC/tact traces, and buffer-boundary Number_Of_Tiks/Current_Tik/
+      Tik.Re/IntFlag dumps on both sides) confirms:
+        - Z80 CPU execution is bit-identical (PC sequence and per-
+          instruction tact deltas match exactly for the traced range).
+        - The interrupt/frame-rollover overshoot past MaxTStates is
+          identical (2 T-states over the 69888 boundary on both sides).
+        - AY register writes happen in the identical VALUE/SEQUENCE order
+          (reg7/reg8 progression confirmed identical across all 4 output
+          buffers).
+        - Number_Of_Tiks/Current_Tik accumulate a tiny (~2 T-state-
+          equivalent, ~3e-5 relative) discrepancy per interrupt-accept
+          event, compounding into a ~37-sample (~0.8ms) shift in exactly
+          when the first audible note starts. Not narrowed to one specific
+          instruction/mechanism; most likely candidate is a small
+          difference in interrupt-acceptance or HALT-related T-state
+          accounting between superzazu/z80 (engine/third_party/z80) and
+          Z80.pas's live interpreter, neither of which this discrepancy's
+          root cause has been pinned to with certainty.
+    rationale: >
+      Not closed as validated: a real, measured (if small and
+      non-content-affecting) divergence exists and per this repo's
+      porting invariants must be tracked, not silently treated as "close
+      enough". Also deliberately NOT ported this pass, per ay_file.h's
+      file comment: AMAD/ST11 TypeIDs (different container formats),
+      author/title/comment string extraction (GUI playlist metadata,
+      irrelevant to audio), FadeLength-based fade-out (cosmetic), and the
+      GUI/label/filter side effects of MainWin.pas's Set_Chip_Frq (only
+      its Delay_In_Tiks/FrqAyByFrqZ80/Tik.Re arithmetic core is
+      reproduced, via ay_file_set_chip_freq).
+    verification: >
+      tests/engine_smoke/test_ay_file.c: loads and plays
+      songs/cpc/Discmac20_0.ay for 200 buffers (102400 frames), confirms
+      audible (non-all-zero) output and no crash; also confirms a
+      malformed header is rejected (AY_FILE_ERR_BAD_HEADER).
+      tests/oracle_diff/run_diff.sh's `ay_file` scenario: runs on every
+      invocation, reports the byte-length of the matching prefix against
+      the real Pascal code as [INFO] (not a hard pass/fail gate, since a
+      full byte-identical match isn't expected yet) - currently 3952/8192
+      bytes (the entire pre-first-note silent region). Manual trace
+      comparison (ad-hoc, via temporary instrumentation of both sides,
+      not checked in) is documented above; if revisited, add a lower-cost
+      repeatable version of that trace comparison rather than redoing it
+      from scratch.
+
+  - id: MIG-0019
+    title: "Real .ym (YM5!, LHA-compressed, extended-Song_Attr) file loading/playback"
+    subsystem: engine/lh5, engine/ym_file
+    state: validated
+    summary: >
+      engine/src/lh5.c ports ay_emul/lh5.pas's "-lh5-" LZH/LHA decompressor
+      (decompression only; the compression path, Encode_Buffer_To_File, is
+      never needed since this project only reads .ym files, never writes
+      them) as a whole-buffer decompress function - the streaming/
+      handle+callback abstraction in the original is unneeded because
+      Players.pas's only caller always requests the entire unpacked size in
+      one call. Verified byte-for-byte against `lha x`'s independent
+      decompression of the real test file's compressed payload before any
+      oracle-diff work started.
+
+      engine/src/ym_file.c ports the real Sergey Bulba/FUXOFT YM5!
+      "extended" format (Song_Attr's low bit set - confirmed this is what
+      songs/cpc/"The Last V8.ym" uses): the LHA container detection +
+      TLZHFileHeader parse (Players.pas:7708-7736), the YM5 header +
+      digidrum-descriptor-table + Title/Author/Comment string scan to
+      locate the register-data offset (Players.pas:7745-7814,
+      2812-2870), YM5i_Get_Registers (Players.pas:13653-13819, the
+      register-plane reader for the extended variant), the shared
+      YM6_Extra_GetRegisters Atari-MFP-style sub-timer "extra effects"
+      engine (Players.pas:12915-13004, up to two simultaneous hardware-
+      envelope/digidrum/sinus effect channels), and SynthesizerYM6
+      (AY.pas:1117-1127). Also reproduces the Set_Chip_Frq/Set_Player_Frq/
+      Set_MFP_Frq arithmetic cores needed to derive AY_Freq/
+      Interrupt_Freq/MFPTimerFrq/Delay_In_Tiks/YM6TiksOnInt from the
+      file's own ChipFrq/InterFrq header fields (MainWin.pas:1544-1548,
+      1570, 2070-2072) - same bounded-arithmetic-only approach as
+      ay_file_set_chip_freq (MIG-0018).
+
+      A genuine bug was caught by this dispatch during porting: the first
+      C-side attempt routed YM6_Extra_GetRegisters's square-wave/digidrum/
+      sinus register writes (effect types 0/1/2) through
+      ay_chip_set_ay_register_fast (which dispatches through SetAmplA/B/C,
+      updating Envelope_EnA/B/C as a side effect) - re-reading the real
+      Pascal confirmed these three cases write RegisterAY.Index[...]
+      directly, bypassing that side effect entirely (only effect type 3,
+      "explicit envelope", goes through a real setter). Fixed to write
+      ay_chip.reg[] directly for types 0/1/2, matching the original
+      exactly - caught by close reading before it ever reached oracle
+      comparison, not by a diff mismatch.
+    rationale: >
+      Closed as validated for the exact case our real test file exercises.
+      Deliberately NOT ported this pass (see ym_file.h's file comment for
+      the equivalent detail):
+        - YM5_Get_Registers / YM6_Get_Registers / YM6i_Get_Registers (the
+          non-extended-YM5 and both YM6 variants) - structurally similar,
+          unexercised by any file in songs/.
+        - Digidrum sample format conversion (YMizeSample / the linear-PCM-
+          to-YM-amplitude-table lookup, Players.pas:2833-2852) - our real
+          test file has Num_of_Dig=0, making this dead code for it. The
+          descriptor-table parse itself IS ported (so a future file with
+          real digidrums fails loudly via an index-range check rather than
+          silently misplaying), but the samples' bytes would be used
+          as-is, unconverted, until this is revisited.
+        - AtariSE1Type/AtariSE2Type values other than what YM5i's own code
+          path drives (SE1 type 0 "square/hardware-envelope" always; SE2
+          type 1 "digidrum" is structurally reachable but provably inert
+          for any file with zero digidrum samples, confirmed via
+          Players.pas:13772's `AtariParam2 >= Length(DDrumSamples)` guard).
+        - YM3/YM3b/YM2/VTX (the simpler, non-LHA, non-extended-header
+          sibling formats, using MakeBufferVTX/VTX_YM3_YM3b_Get_Registers
+          - a different code path entirely) - VTX gets its own milestone
+          (songs/vtx/Intro.vtx).
+      Also noteworthy for future oracle-harness work on this file family:
+      AtariSE1Type/AtariSE2Type/AtariSE1Channel/AtariSE2Channel/
+      AtariTimerCounter1/2/AtariV1/AtariV2/YM6SinusPos1/2/DDrumSamples are
+      all declared in Players.pas's IMPLEMENTATION section (Players.pas:
+      1171-1180), not its interface, so OracleHarness.pas cannot set them
+      explicitly the way it does for the (interface-declared) FT.AY
+      globals - RunYMFileTest instead relies on being a fresh process
+      invocation (Pascal's guaranteed zero/nil default for these), which
+      is confirmed equivalent to Players.pas's real init block for every
+      field except AtariSE2Type - and that one exception is proven not to
+      matter for a Num_of_Dig=0 file (see summary). This reasoning would
+      need revisiting for a test file that actually uses digidrums.
+    verification: >
+      tests/engine_smoke/test_ym_file.c: loads and plays songs/cpc/"The
+      Last V8.ym" for 400 buffers (204800 frames), confirms audible
+      (non-all-zero) output and no crash; also confirms a malformed
+      header is rejected.
+      tests/oracle_diff/run_diff.sh's `ym_file` scenario: byte-identical
+      PCM output (4 buffers, 512 stereo16 frames each) between
+      engine/src/lh5.c+ym_file.c and the real Players.pas/AY.pas code via
+      OracleHarness.pas's RunYMFileTest - a hard pass/fail gate (unlike
+      MIG-0018's ay_file scenario, this one fully passes).
+      Two real bugs were caught and fixed by this comparison before it
+      passed: (1) OracleHarness.pas's RunYMFileTest initially crashed
+      with a floating-point exception because Tik.Re was never reset to
+      the file's own Delay_In_Tiks after ResetChip0 set it from the
+      not-yet-computed value 0 (same class of mistake as MIG-0018's
+      missing-BufferLength bug - Averager16 divided by the resulting
+      zero Tick_Counter.Hi); (2) the register-write side-effect bug
+      described in this entry's summary, caught by re-reading the source
+      rather than by the diff itself.
+
+  - id: MIG-0020
+    title: "Real .pt3 (Pro Tracker 3) file loading/playback"
+    subsystem: engine/pt3_file
+    state: validated
+    summary: >
+      engine/src/pt3_file.c ports the Pro Tracker 3 tracker/module format
+      (FT.PT3) for standalone files (no embedded/rebased-pointer loading -
+      confirmed dead code for both real test files, see pt3_file.h):
+      the file-into-RAM load (Players.pas:2248-2264), PT3_Get_Registers in
+      full (Players.pas:12302-12767 - GetNoteFreq, PatternInterpreter, the
+      9-numbered-effect-command interpreter, ChangeRegisters, and the main
+      per-frame body), and the InitTrackerModule FT.PT3 init block
+      (Players.pas:3717-3806). Unlike AY/YM, this is a genuine event/
+      tracker engine (pattern/sample/ornament interpretation against
+      note-pitch and volume tables), not a register-dump format - no Z80
+      execution either way, output goes through the same already-ported
+      AY.pas mixer (engine/ay.h) via direct ay_chip.reg[] writes and
+      ay_chip_set_ay_register_fast (matching exactly which of
+      PatternInterpreter/ChangeRegisters' register writes go through a
+      real setter - with side effects on Envelope_EnA/B/C - versus a raw
+      field write, confirmed by close reading of the original, not
+      guessed).
+
+      Both real test files (songs/pt3/ARTe_ST1.pt3, version 4, uses
+      PT3VolumeTable_33_34; songs/turbo_sound/Gasman_-_dynamite.pt3,
+      version 7, uses PT3VolumeTable_35) use PT3_TonTableId=1
+      (PT3NoteTable_ST) - confirmed by inspecting both files directly, not
+      assumed - so only that one of 6 possible note-pitch tables needed
+      porting; a file using a different TonTableId is rejected loudly
+      (PT3_FILE_ERR_BAD_HEADER) rather than silently mis-tuned.
+
+      Two real bugs were caught and fixed via this milestone's oracle
+      comparison before it passed:
+      (1) OracleHarness.pas's RunPT3FileTest initially crashed with an
+      access violation because LoadTrackerModule was called with Index=0;
+      its very last line is `if Index <> -1 then RedrawItem(Index)`, a
+      GUI call with no playlist instantiated in oracle mode - fixed by
+      passing Index=-1 (the documented "no real playlist index" sentinel
+      the function already supports).
+      (2) Once running, engine output matched the real Pascal code's
+      *register* state exactly (confirmed via direct comparison - the
+      tracker-engine translation itself was correct on the first real
+      run) but produced quieter PCM audio - traced to ay_engine_init's
+      chip_type defaulting to YM (AY_CHIP_TYPE_YM), while the FIRST
+      attempt at this port's oracle harness had incorrectly set
+      `ChType := AY_Chip` on the Pascal side to "fix" what looked like a
+      mismatch. Re-reading AY.pas:151 showed ChType's own real global
+      default is YM_Chip, and PT3 never overrides it (only VTX's loader
+      sets Chip_Type, Players.pas:7674-7677) - so the C side's default was
+      right all along and the Pascal harness was the one with the bug,
+      caught and reverted rather than papering over it by changing the C
+      default to match a wrong harness.
+    rationale: >
+      Closed as validated for both real test files. Deliberately NOT
+      ported this pass (see pt3_file.h's file comment for the equivalent
+      detail):
+        - GetTimePT3 (duration/loop-point precompute, Players.pas:
+          15315-15645) - UI-only (seek/scrub, duration display), not
+          needed for correct audio playback. Consequence: this port has
+          no real Global_Tick_Max/"song has ended" concept - playback
+          continues indefinitely (pattern-internal looping via
+          CurrentPosition/LoopPosition still works correctly), the caller
+          decides how many buffers to render. Both the C port and the
+          oracle harness set a large sentinel for Global_Tick_Max instead
+          of a real computed value.
+        - Turbosound/TSMode - MIG-0007, confirmed still not exercised by
+          either real file (unchanged finding from an earlier session).
+        - Embedded/rebased-pointer PT3 loading (the MAddr<>0 rebase branch
+          in LoadTrackerModule) - both real files are standalone with
+          MAddr=0, making this dead code for them.
+        - 5 of 6 PT3NoteTable_* variants (only PT3NoteTable_ST is ported -
+          see summary).
+    verification: >
+      tests/engine_smoke/test_pt3_file.c: loads and plays both real .pt3
+      files for 400 buffers each (204800 frames), confirms audible
+      (non-all-zero) output and no crash for both; also confirms a
+      malformed header (unsupported PT3_TonTableId) is rejected.
+      tests/oracle_diff/run_diff.sh's `pt3_file` scenario (looped over
+      both real files): byte-identical PCM output (400 buffers, 512
+      stereo16 frames each = 204800 frames = 819200 bytes) between
+      engine/src/pt3_file.c and the real Players.pas/AY.pas code via
+      OracleHarness.pas's RunPT3FileTest, for BOTH files - a hard
+      pass/fail gate, both passing.
+
+  - id: MIG-0021
+    title: "SNDH file loading/playback (parked mid-milestone - VBL scheduling confirmed correct; AY registers never written after ~14s virtual playback)"
+    subsystem: engine/sndh_file
+    state: behaviorally_incomplete
+    summary: >
+      engine/src/sndh_file.c ports sndh_UnpackFile's non-ICE-compressed
+      path (confirmed our real test file, songs/sndh/Temple_of_Asherah.sndh,
+      is not "ICE!"-compressed), a minimal sndh_ExtractTextInfo tag scanner
+      (VBL/TA/TB/TC/TD for PlayFreq, "##" for NumberOfSongs, "!#"/"#!" for
+      CurrentSong - COMM/TITL/RIPP/CONV/YEAR/TIME/nSN content is skipped,
+      UI-only), and atari.pas's Atari_PrepMem memory layout in full
+      (exception vector table, a hand-assembled VBL interrupt handler,
+      TRAP#1/Super stub, Cookie Jar, and the "start point" trampoline that
+      BSRs into the SNDH's own INIT and installs its PLAY address into the
+      VBL queue) - built on the already-validated Atari hardware layer
+      (engine/atari_emulate.h/mfp.h/dma_sound.h/m68k_bus.h, MIG-0013/0014/
+      0015).
+
+      Verified rigorously via a dedicated PC-trace oracle comparison
+      (OracleHarness.pas's RunSNDHTraceTest, driving the real Atari_PrepEmu
+      + Atari_Emulate against the same file): the 68000 CPU execution and
+      the entire memory/OS-environment setup are BYTE-FOR-BYTE IDENTICAL
+      between engine/src/sndh_file.c and the real Pascal code through
+      30906 distinct PC values, covering the SNDH's own INIT routine, the
+      trampoline's VBL-queue installation, and the CPU correctly reaching
+      its idle STOP instruction awaiting the first timer interrupt. This
+      is strong, direct evidence the memory-layout port itself (the
+      hardest, most error-prone part of this milestone) is correct.
+
+      Past that point, NEITHER implementation's audio started within a
+      bounded test run (2000+ Atari_Emulate calls on the real oracle,
+      confirmed via the same trace tool) - originally traced to a REAL
+      SECOND BUG, since found and fixed: engine/src/sndh_file.c's tag
+      scanner read the 2-byte numeric-tag identifiers (VBL/TA/TB/TC/TD/
+      "##"/"!#"/"#!") with a big-endian helper, but sndh.pas's
+      TSNDHTag.W1 is a raw in-memory word OVERLAY read directly off disk
+      into a native (x86, little-endian) Pascal variable - i.e. these 2-
+      byte tag IDs need native-LE comparison (word = byte0 + byte1*256),
+      not the "read left-to-right" convention that happens to work for
+      the 4-byte string tags (SNDH/HDNS/COMM/etc, by their own byte-
+      reversal symmetry - a coincidence that masked this bug for those
+      tags while breaking the numeric ones). Concretely: this file's
+      "TC200" tag (PlayFreq=200 via Timer C) was NEVER matched, so
+      PlayFreq silently stayed at its 50 default, giving a wrong
+      VBLPeriod (160000 instead of the correct 40000) - fixed by adding
+      a dedicated native-LE read for just this comparison, verified via
+      a debug build that VBLPeriod is now exactly 40000 as expected.
+
+      With that fix in place, VBL interrupt SCHEDULING is now correct AND
+      confirmed to match the real oracle exactly: both engine/src/
+      sndh_file.c and OracleHarness.pas's RunSNDHTraceTest (driving the
+      real Atari_PrepEmu/Atari_Emulate) independently settle into the
+      identical tight 3-instruction loop at $37F6-$37FC with the
+      identical odometer progression for the first 2000+ scheduler
+      calls - this is confirmed to be the SNDH replayer's OWN real,
+      correct short-term behavior, not a divergence or bug (a second,
+      much bigger scale run on the C side alone shows the loop DOES
+      eventually break - by ~280000 cycles, ~7 VBL periods in - into what
+      looks like real PLAY-routine execution, with BaseVBL incrementing
+      correctly roughly once per VBLPeriod as expected).
+
+      However, driving engine/src/sndh_file.c alone for 2,000,000
+      atari_emulate_step calls (~110M+ cycles, ~2750 VBL periods, ~14
+      real-time seconds' worth of playback) shows NOT ONE of the 14 AY
+      registers (reg[0..13]) ever changes value, despite PLAY visibly
+      running every VBL (PC visits many distinct addresses each time,
+      consistent with a real replay engine advancing through pattern
+      data) - the YM2149 register file this port wires up
+      (m68k_bus_add_callback_region at $FF8800-$FF88FF,
+      ym_region_read/write in engine/atari_emulate.c) is simply never
+      touched. This is the current, most precise open question: either
+      (a) this specific SNDH replayer takes longer than ~14 virtual
+      seconds before its first actual note/register write (unlikely for
+      a typical demo tune, but not verified against the real oracle at
+      this same timescale - RunSNDHTraceTest was only run to ~2000 low-
+      level scheduler calls, nowhere near this many VBLs, so this
+      remains genuinely unconfirmed either way), or (b) the replayer
+      writes its AY register data through some path this port doesn't
+      intercept (e.g. a different address/stride convention, or a
+      TRAP/XBIOS routine rather than a direct memory-mapped write).
+      Distinguishing between these needs the SAME long-running oracle
+      comparison (RunSNDHTraceTest extended to compare reg[7]/reg[8]
+      changes over a comparably large VBL count against the real Pascal
+      code) that hasn't been run yet - the natural next step.
+    rationale: >
+      Parked deliberately (not abandoned) after explicit user direction to
+      move on to the remaining format (VTX) and return with fresh eyes,
+      given this is a genuine, deep Atari-ST-hardware-scheduling question
+      rather than a straightforward porting-mechanics bug like MIG-0018/
+      0019/0020's issues all turned out to be. The bounded-evidence
+      approach already used throughout this project (verify what's
+      confirmed, document precisely what isn't, avoid guessing) is
+      followed here: the memory-layout/CPU-execution port is validated as
+      correct; the scheduling stall is precisely characterized (exact
+      symptom, exact hypothesis, exact evidence for and against) rather
+      than hidden or hand-waved.
+    verification: >
+      tests/engine_smoke/test_sndh_file.c exists and builds, but its
+      audible-output assertion currently FAILS (not committed in a
+      passing state - left failing/skipped, not silently weakened, until
+      the scheduling question above is resolved). The RunSNDHTraceTest
+      oracle scenario (OracleHarness.pas, gated behind
+      AY_EMUL_ORACLE=sndh_trace) is a real, reusable diagnostic - not
+      wired into run_diff.sh's pass/fail suite yet since it doesn't
+      produce a byte-comparable artifact (it's a live PC/register trace
+      for interactive debugging), but it's what proved the memory-layout
+      claim above and should be the starting point when this is resumed.
+
+  - id: MIG-0022
+    title: "Real .vtx file loading/playback"
+    subsystem: engine/vtx_file
+    state: validated
+    summary: >
+      engine/src/vtx_file.c ports the VTX register-dump format (FT.VTX,
+      confirmed lh5/LZH-compressed like YM files - engine/lh5.h, MIG-0019 -
+      but WITHOUT a "-lh5-"-signature TLZHFileHeader wrapper: the
+      compressed payload's length is simply "whatever's left in the
+      file" after the header+strings, not a separately-encoded field):
+      the VTX header parse in both its short ("AY"/"YM", no Year/
+      Programm/Tracker/Comment fields) and long ("ay"/"ym", with them)
+      variants (Players.pas:7650-7707 - our real test file,
+      songs/vtx/Intro.vtx, is the long "ay" variant), the lh5
+      decompression call (Players.pas:2736-2752), VTX_YM3_YM3b_Get_
+      Registers and MakeBufferVTX (Players.pas:12768-12825) - the
+      simplest register-plane reader ported so far, no digidrum/sinus/
+      envelope sub-timer engine unlike YM5i (MIG-0019) - and the
+      PrepareToPlay FT.VTX init + Chip_Type selection (AY_Chip for our
+      "ay"-tagged file, confirmed via the real file's own magic bytes).
+
+      This was the smoothest of the five formats ported this session:
+      loaded, played audibly, and matched the real Pascal code byte-for-
+      byte on the FIRST real attempt for both the smoke test and the
+      oracle-diff comparison, with no bugs found - a useful data point
+      that the earlier formats' bugs (BufferLength, Synthesizer
+      assignment, Tik.Re-on-freq-change, chip-type defaults, LoadTrackerModule's
+      Index=-1 convention) were genuinely format-specific pitfalls, not
+      systematic gaps in the porting approach itself.
+    rationale: >
+      Closed as validated. Deliberately NOT ported: YM3/YM3b (a different
+      sibling format sharing VTX_YM3_YM3b_Get_Registers but a distinct
+      loader path, Players.pas:2790-2811) - out of scope, no real test
+      file exercises it.
+    verification: >
+      tests/engine_smoke/test_vtx_file.c: loads and plays songs/vtx/
+      Intro.vtx for 400 buffers (204800 frames), confirms audible
+      (non-all-zero) output and no crash; also confirms a malformed
+      header is rejected.
+      tests/oracle_diff/run_diff.sh's `vtx_file` scenario: byte-identical
+      PCM output (400 buffers, 512 stereo16 frames each) between
+      engine/src/lh5.c+vtx_file.c and the real Players.pas/AY.pas code via
+      OracleHarness.pas's RunVTXFileTest - a hard pass/fail gate, passing.

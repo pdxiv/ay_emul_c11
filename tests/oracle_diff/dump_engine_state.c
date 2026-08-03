@@ -8,6 +8,10 @@
 #include <string.h>
 
 #include "ay_engine/ay.h"
+#include "ay_engine/ay_file.h"
+#include "ay_engine/ym_file.h"
+#include "ay_engine/pt3_file.h"
+#include "ay_engine/vtx_file.h"
 #include "ay_engine/z80_bus.h"
 #include "ay_engine/m68k_bus.h"
 #include "ay_engine/mfp.h"
@@ -332,9 +336,171 @@ static void run_dma(const char* out_path) {
   fclose(f);
 }
 
+/* Matches OracleHarness.pas's RunAYFileTest exactly: same defaults, same
+ * 4x512-stereo16-frame buffer sequence, driving engine/src/ay_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_ay_file(const char* out_path, const char* ay_path) {
+  FILE* in = fopen(ay_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_ay_file: cannot open %s\n", ay_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_ay_file: short read on %s\n", ay_path);
+    exit(1);
+  }
+  fclose(in);
+
+  ay_file f;
+  ay_file_status st = ay_file_load(&f, data, (size_t)sz, 0,
+                                    AY_FILE_AY_FREQ_DEF, AY_FILE_FRQ_Z80_DEF,
+                                    AY_FILE_SAMPLE_RATE_DEF);
+  if (st != AY_FILE_OK) {
+    fprintf(stderr, "run_ay_file: ay_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+  /* OracleHarness.pas's RunAYFileTest can't safely replicate Z80.pas:11112's
+   * `if AYFileEnableAutoSwitch then FrmMain.Set_Chip_Frq(1000000)` call -
+   * FrmMain is never instantiated in oracle mode (Application.CreateForm
+   * doesn't run), so calling it would crash. The harness therefore leaves
+   * AYFileEnableAutoSwitch at its default False, meaning the CPC-protocol
+   * chip-frequency auto-switch path (real, and smoke-tested via
+   * test_ay_file.c against this exact file, which does trigger it) isn't
+   * exercised by this particular comparison - disable it here too so both
+   * sides run the identical code path. See migration_debt.yaml. */
+  f.bus.ay_file_enable_auto_switch = false;
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 4 && !f.real_end_all; n++) {
+    ay_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+  free(data);
+}
+
+/* Matches OracleHarness.pas's RunYMFileTest exactly: same defaults, same
+ * 4x512-stereo16-frame buffer sequence, driving engine/src/lh5.c +
+ * ym_file.c against the real test file (path supplied as argv[3]). */
+static void run_ym_file(const char* out_path, const char* ym_path) {
+  FILE* in = fopen(ym_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_ym_file: cannot open %s\n", ym_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_ym_file: short read on %s\n", ym_path);
+    exit(1);
+  }
+  fclose(in);
+
+  ym_file f;
+  ym_file_status st = ym_file_load(&f, data, (size_t)sz, YM_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != YM_FILE_OK) {
+    fprintf(stderr, "run_ym_file: ym_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 4 && !f.real_end_all; n++) {
+    ym_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+  ym_file_free(&f);
+}
+
+/* Matches OracleHarness.pas's RunPT3FileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/pt3_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_pt3_file(const char* out_path, const char* pt3_path) {
+  FILE* in = fopen(pt3_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_pt3_file: cannot open %s\n", pt3_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_pt3_file: short read on %s\n", pt3_path);
+    exit(1);
+  }
+  fclose(in);
+
+  pt3_file f;
+  pt3_file_status st = pt3_file_load(&f, data, (size_t)sz, PT3_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != PT3_FILE_OK) {
+    fprintf(stderr, "run_pt3_file: pt3_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    pt3_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunVTXFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/lh5.c +
+ * vtx_file.c against the real test file (path supplied as argv[3]). */
+static void run_vtx_file(const char* out_path, const char* vtx_path) {
+  FILE* in = fopen(vtx_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_vtx_file: cannot open %s\n", vtx_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_vtx_file: short read on %s\n", vtx_path);
+    exit(1);
+  }
+  fclose(in);
+
+  vtx_file f;
+  vtx_file_status st = vtx_file_load(&f, data, (size_t)sz, VTX_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != VTX_FILE_OK) {
+    fprintf(stderr, "run_vtx_file: vtx_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    vtx_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+  vtx_file_free(&f);
+}
+
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    fprintf(stderr, "usage: %s <zx|cpc|immediate|pcm> <output-path>\n", argv[0]);
+  if (argc < 3) {
+    fprintf(stderr, "usage: %s <zx|cpc|immediate|pcm|ay_file> <output-path> [extra-arg]\n", argv[0]);
     return 1;
   }
   const char* scenario = argv[1];
@@ -349,7 +515,31 @@ int main(int argc, char** argv) {
   else if (strcmp(scenario, "m68k") == 0) run_m68k(out_path);
   else if (strcmp(scenario, "mfp") == 0) run_mfp(out_path);
   else if (strcmp(scenario, "dma") == 0) run_dma(out_path);
-  else {
+  else if (strcmp(scenario, "ay_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s ay_file <output-path> <ay-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_ay_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "ym_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s ym_file <output-path> <ym-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_ym_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "pt3_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s pt3_file <output-path> <pt3-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_pt3_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "vtx_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s vtx_file <output-path> <vtx-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_vtx_file(out_path, argv[3]);
+  } else {
     fprintf(stderr, "unknown scenario '%s'\n", scenario);
     return 1;
   }
