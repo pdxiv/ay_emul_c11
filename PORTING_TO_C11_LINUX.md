@@ -677,26 +677,39 @@ Given §2's finding that the engine is largely GUI-decoupled, and §5's
 finding that the GUI is the highest-risk, lowest-mechanical-translatability
 part of the codebase, the port is much lower-risk done in this order:
 
+**Status: phases 0–4 done (see `migration_debt.yaml` for the full
+MIG-#### ledger); phase 5 (GUI) not started.**
+
 0. **Run the Z80 fidelity gate** (§7.1) before writing any engine code:
    confirm superzazu/z80 — already decided on — passes ZEXALL/ZEXDOC and
    matches the T-state/callback-hook shape this codebase needs. (The 68000
    core is likewise already decided — Musashi, §3.2/§7.1.) Both CPU-core
    choices are made; this step is verification, not selection, and doing
    it first avoids rework — it determines the shape of the C static
-   library step 1 builds.
+   library step 1 builds. **Done** — `tests/zexall/run_gate.sh` passes,
+   cycle-exact.
 1. **Core CPU/sound emulation** (Z80 via the library chosen in step 0, AY
    likewise per §7.1, 68000 via Musashi) as a standalone C static library
    with no GTK/audio-output dependency. Get correctness nailed down early
    via differential testing against the existing, working Pascal binary
    (this repo already builds and runs — see `BUILDING_UBUNTU20.04.md` —
    making it a ready-made test oracle: run both on the same input files and
-   diff the generated PCM/register traces).
+   diff the generated PCM/register traces). **Done** — `engine/` (Z80,
+   68000/Musashi, AY-3-8910/12, Atari MFP/DMA-sound/scheduling), oracle-
+   validated (MIG-0001..0017).
 2. **Format parsers** (`Players.pas` and friends, §7.5 — this part stays a
    hand-port, there's no library for it) on top of that library, validated
    the same way — decode a corpus of real files with both old and new
-   binaries and byte-compare output.
+   binaries and byte-compare output. **Done** for AY/YM/PT3/VTX (byte-
+   identical, MIG-0018..0020/0022); SNDH loads and runs but has one known-
+   incomplete gap (MIG-0021 — no audible output yet, root cause
+   documented). The separate `tools/identify_ay_file/` utility (format
+   *identification*, not playback — MIG-0023/0024) also lives here.
 3. **ALSA output** (§4.2) — genuinely simpler in C than the current
-   binding-layer approach.
+   binding-layer approach. **Done** — `tools/ay_player/src/alsa_output.c`
+   (MIG-0025); no library-equivalent byte-oracle exists for audio hardware
+   output, so this is verified by code review, a graceful-no-device-
+   failure check, and manual listening rather than a diff gate.
 4. **A minimal CLI/headless player** that exercises 1–3 end-to-end, plus
    WAV export (§4.3/§7.3 — trivial, no library: hand-write a WAV header
    and stream the same PCM the player already produces). This is the
@@ -705,7 +718,10 @@ part of the codebase, the port is much lower-risk done in this order:
    separate "codec integration" step is needed — playback is limited to
    the chiptune formats `Players.pas` already covers, and BASS (and any
    open replacement for it) is out of scope entirely, so this port never
-   has a step for MP3/OGG/etc. playback or export to begin with.
+   has a step for MP3/OGG/etc. playback or export to begin with. **Done**
+   — `tools/ay_player` (`ay_player <file> [--wav=<path>] [--seconds=N]`,
+   MIG-0026/0027); WAV export is oracle-diff'd byte-identical against
+   `Convs.pas`'s `WAV_Converter`.
 5. **GUI**, last, and treated as its own scoped effort per §5 — likely
    worth a separate design decision (reproduce the skinned UI exactly, or
    ship a simpler first-cut with standard GTK widgets) rather than
@@ -714,6 +730,8 @@ part of the codebase, the port is much lower-risk done in this order:
    the widget tree and signal stubs in place before hand-porting handler
    bodies; `MainWin.pas` and `PlayList.pas` get no benefit from the
    generator and should be scoped as hand-design work from the start.
+   **Not started** — needs its own planning pass (the design decision
+   above) before work begins.
 
 ### 8.1 The `ay_emul` submodule may be extended with oracle-harness diagnostics — never patched to match the port
 

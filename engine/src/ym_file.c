@@ -130,12 +130,6 @@ ym_file_status ym_file_load(ym_file* f, const uint8_t* data, size_t size,
     free(unpacked);
     return YM_FILE_ERR_UNSUPPORTED_TYPE;
   }
-  if (f->is_ym6) {
-    /* YM6i_Get_Registers not ported this milestone either - our real test
-     * file is YM5, see ym_file.h. */
-    free(unpacked);
-    return YM_FILE_ERR_UNSUPPORTED_TYPE;
-  }
 
   f->data = unpacked;
   f->data_size = unpacked_size;
@@ -210,9 +204,15 @@ ym_file_status ym_file_load(ym_file* f, const uint8_t* data, size_t size,
   ay_engine_calculate_level_tables(&f->ay);
   ay_engine_reset_chip(&f->ay, true);
 
-  /* Players.pas:4009-4025 (PrepareToPlay's FT.YM5 branch). */
-  f->atari_se1_type = 0;
-  f->atari_se2_type = 1;
+  /* Players.pas:4009-4025 (PrepareToPlay's shared FT.YM2/YM5/YM6 branch;
+   * only FT.YM5 gets these two fixed defaults - for FT.YM6,
+   * AtariSE1Type/AtariSE2Type are left at their Pascal-global zero
+   * default, matching this struct's own memset above, and get properly
+   * assigned by ym6i_get_registers's first real frame). */
+  if (!f->is_ym6) {
+    f->atari_se1_type = 0;
+    f->atari_se2_type = 1;
+  }
   f->position_in_vtx = 0;
   f->atari_se1_channel = 0;
   f->atari_se2_channel = 0;
@@ -399,6 +399,262 @@ static void ym5i_get_registers(ym_file* f) {
     f->position_in_vtx = f->loop_vbl;
 }
 
+/* Players.pas:13121-13385 YM6i_Get_Registers. Structurally a sibling of
+ * ym5i_get_registers (same 14 register-plane reads at the same relative
+ * offsets), but NOT a small diff of it - real differences:
+ *  - Register-1/3's top 2 bits (`b shr 6`) are the effect TYPE (SE1Typ/
+ *    SE2Typ: 0=square, 1=digidrum, 2=sinus, 3=explicit envelope) here,
+ *    not YM5i's single "reset timer counter" flag bit - there is no
+ *    timer-counter-reset check in YM6i at all.
+ *  - AtariSE1Type/AtariSE2Type are reassigned from SE1Typ/SE2Typ every
+ *    frame (Players.pas:13238,13322) - YM6's actual "switch effect type
+ *    mid-song" feature - instead of being fixed at load time.
+ *  - Per-type setup dispatch: types 0/2 both just capture a 4-bit
+ *    parameter and set Envelope_En{A,B,C}; type 3 captures the same
+ *    4-bit parameter AND immediately calls SetAmplX(x and 16); the
+ *    else/digidrum case (type 1) captures a 5-bit parameter and ALSO
+ *    sets Envelope_En{A,B,C} (yes, even for digidrum - replicated
+ *    literally, not "fixed").
+ *  - The digidrum-index-bounds check happens here too (redundant with,
+ *    but in addition to, the one already in ym6_extra_get_registers).
+ *  - The mixer force-open logic is gated on type=1 per slot
+ *    independently (two separate checks), unlike YM5i's unconditional
+ *    per-channel force (YM5i hardcodes SE2=digidrum always). */
+static void ym6i_get_registers(ym_file* f) {
+  ay_chip* chip = &f->ay.chip;
+  int32_t k = f->position_in_vtx + f->vtx_offset;
+  const uint8_t* d = f->data;
+  int32_t vbl = f->number_of_vbls;
+  uint8_t b, mx, la, lb, lc;
+  int se1ch, se2ch, se1typ, se2typ;
+  uint8_t se1tc, se2tc;
+  double frq;
+
+  ay_chip_set_ay_register_fast(chip, 0, d[k]);
+
+  k += vbl;
+  b = d[k];
+  ay_chip_set_ay_register_fast(chip, 1, (uint8_t)(b & 15));
+  se1ch = (b & 0x30) >> 4;
+  se1typ = b >> 6;
+
+  k += vbl;
+  ay_chip_set_ay_register_fast(chip, 2, d[k]);
+
+  k += vbl;
+  b = d[k];
+  ay_chip_set_ay_register_fast(chip, 3, (uint8_t)(b & 15));
+  se2ch = (b & 0x30) >> 4;
+  se2typ = b >> 6;
+
+  k += vbl;
+  ay_chip_set_ay_register_fast(chip, 4, d[k]);
+
+  k += vbl;
+  ay_chip_set_ay_register_fast(chip, 5, (uint8_t)(d[k] & 15));
+
+  k += vbl;
+  b = d[k];
+  ay_chip_set_ay_register_fast(chip, 6, (uint8_t)(b & 31));
+  f->atari_se1_tp = b >> 5;
+
+  k += vbl;
+  mx = (uint8_t)(d[k] & 63);
+
+  k += vbl;
+  la = d[k];
+  f->atari_se2_tp = la >> 5;
+
+  k += vbl;
+  lb = d[k];
+
+  k += vbl;
+  lc = d[k];
+
+  k += vbl;
+  ay_chip_set_ay_register_fast(chip, 11, d[k]);
+
+  k += vbl;
+  ay_chip_set_ay_register_fast(chip, 12, d[k]);
+
+  k += vbl;
+  b = d[k];
+  if (b != 255) ay_chip_set_ay_register_fast(chip, 13, (uint8_t)(b & 15));
+
+  k += vbl;
+  se1tc = d[k];
+
+  k += vbl;
+  se2tc = d[k];
+
+  if (se1tc != 0 && f->atari_se1_tp != 0 && se1ch != 0) {
+    switch (se1ch) {
+      case 1:
+        if (se1typ == 0 || se1typ == 2) {
+          f->atari_param1 = la & 15;
+          chip->envelope_en_a = true;
+        } else if (se1typ == 3) {
+          f->atari_param1 = la & 15;
+          ay_chip_set_ay_register_fast(chip, 8, (uint8_t)(la & 16));
+        } else {
+          f->atari_param1 = la & 31;
+          chip->envelope_en_a = true;
+        }
+        break;
+      case 2:
+        if (se1typ == 0 || se1typ == 2) {
+          f->atari_param1 = lb & 15;
+          chip->envelope_en_b = true;
+        } else if (se1typ == 3) {
+          f->atari_param1 = lb & 15;
+          ay_chip_set_ay_register_fast(chip, 9, (uint8_t)(lb & 16));
+        } else {
+          f->atari_param1 = lb & 31;
+          chip->envelope_en_b = true;
+        }
+        break;
+      case 3:
+        if (se1typ == 0 || se1typ == 2) {
+          f->atari_param1 = lc & 15;
+          chip->envelope_en_c = true;
+        } else if (se1typ == 3) {
+          f->atari_param1 = lc & 15;
+          ay_chip_set_ay_register_fast(chip, 10, (uint8_t)(lc & 16));
+        } else {
+          f->atari_param1 = lc & 31;
+          chip->envelope_en_c = true;
+        }
+        break;
+    }
+    if (se1typ == 1 && f->atari_param1 >= f->digidrum_count) se1ch = 0;
+    f->atari_se1_type = se1typ;
+    f->atari_se1_channel = se1ch;
+    f->atari_se1_pos = 0;
+    frq = 1.0 / (f->mfp_timer_frq / se1tc / (f->ay_freq / 8.0));
+    switch (f->atari_se1_tp) {
+      case 1: f->atari_timer_period1 = frq * 4; break;
+      case 2: f->atari_timer_period1 = frq * 10; break;
+      case 3: f->atari_timer_period1 = frq * 16; break;
+      case 4: f->atari_timer_period1 = frq * 50; break;
+      case 5: f->atari_timer_period1 = frq * 64; break;
+      case 6: f->atari_timer_period1 = frq * 100; break;
+      case 7: f->atari_timer_period1 = frq * 200; break;
+    }
+    if (f->atari_timer_counter1 >= f->atari_timer_period1)
+      f->atari_timer_counter1 = 0;
+  } else {
+    if (f->atari_se1_channel != 0 && f->atari_se1_type == 1) {
+      switch (f->atari_se1_channel) {
+        case 1: if ((mx & 9) != 9) f->atari_se1_channel = 0; break;
+        case 2: if ((mx & 18) != 18) f->atari_se1_channel = 0; break;
+        case 3: if ((mx & 36) != 36) f->atari_se1_channel = 0; break;
+      }
+    } else {
+      f->atari_se1_channel = 0;
+      f->atari_timer_counter1 = 0;
+      f->atari_v1 = 0;
+    }
+  }
+
+  if (se2tc != 0 && f->atari_se2_tp != 0 && se2ch != 0) {
+    switch (se2ch) {
+      case 1:
+        if (se2typ == 0 || se2typ == 2) {
+          f->atari_param2 = la & 15;
+          chip->envelope_en_a = true;
+        } else if (se2typ == 3) {
+          f->atari_param2 = la & 15;
+          ay_chip_set_ay_register_fast(chip, 8, (uint8_t)(la & 16));
+        } else {
+          f->atari_param2 = la & 31;
+          chip->envelope_en_a = true;
+        }
+        break;
+      case 2:
+        if (se2typ == 0 || se2typ == 2) {
+          f->atari_param2 = lb & 15;
+          chip->envelope_en_b = true;
+        } else if (se2typ == 3) {
+          f->atari_param2 = lb & 15;
+          ay_chip_set_ay_register_fast(chip, 9, (uint8_t)(lb & 16));
+        } else {
+          f->atari_param2 = lb & 31;
+          chip->envelope_en_b = true;
+        }
+        break;
+      case 3:
+        if (se2typ == 0 || se2typ == 2) {
+          f->atari_param2 = lc & 15;
+          chip->envelope_en_c = true;
+        } else if (se2typ == 3) {
+          f->atari_param2 = lc & 15;
+          ay_chip_set_ay_register_fast(chip, 10, (uint8_t)(lc & 16));
+        } else {
+          f->atari_param2 = lc & 31;
+          chip->envelope_en_c = true;
+        }
+        break;
+    }
+    if (se2typ == 1 && f->atari_param2 >= f->digidrum_count) se2ch = 0;
+    f->atari_se2_type = se2typ;
+    f->atari_se2_channel = se2ch;
+    f->atari_se2_pos = 0;
+    frq = 1.0 / (f->mfp_timer_frq / se2tc / (f->ay_freq / 8.0));
+    switch (f->atari_se2_tp) {
+      case 1: f->atari_timer_period2 = frq * 4; break;
+      case 2: f->atari_timer_period2 = frq * 10; break;
+      case 3: f->atari_timer_period2 = frq * 16; break;
+      case 4: f->atari_timer_period2 = frq * 50; break;
+      case 5: f->atari_timer_period2 = frq * 64; break;
+      case 6: f->atari_timer_period2 = frq * 100; break;
+      case 7: f->atari_timer_period2 = frq * 200; break;
+    }
+    if (f->atari_timer_counter2 >= f->atari_timer_period2)
+      f->atari_timer_counter2 = 0;
+  } else {
+    if (f->atari_se2_channel != 0 && f->atari_se2_type == 1) {
+      switch (f->atari_se2_channel) {
+        case 1: if ((mx & 9) != 9) f->atari_se2_channel = 0; break;
+        case 2: if ((mx & 18) != 18) f->atari_se2_channel = 0; break;
+        case 3: if ((mx & 36) != 36) f->atari_se2_channel = 0; break;
+      }
+    } else {
+      f->atari_se2_channel = 0;
+      f->atari_timer_counter2 = 0;
+      f->atari_v2 = 0;
+    }
+  }
+
+  if (f->atari_se1_type == 1) {
+    switch (f->atari_se1_channel) {
+      case 1: mx |= 9; break;
+      case 2: mx |= 18; break;
+      case 3: mx |= 36; break;
+    }
+  }
+  if (f->atari_se2_type == 1) {
+    switch (f->atari_se2_channel) {
+      case 1: mx |= 9; break;
+      case 2: mx |= 18; break;
+      case 3: mx |= 36; break;
+    }
+  }
+
+  ay_chip_set_ay_register_fast(chip, 7, mx);
+
+  if (f->atari_se1_channel != 1 && f->atari_se2_channel != 1)
+    ay_chip_set_ay_register_fast(chip, 8, (uint8_t)(la & 31));
+  if (f->atari_se1_channel != 2 && f->atari_se2_channel != 2)
+    ay_chip_set_ay_register_fast(chip, 9, (uint8_t)(lb & 31));
+  if (f->atari_se1_channel != 3 && f->atari_se2_channel != 3)
+    ay_chip_set_ay_register_fast(chip, 10, (uint8_t)(lc & 31));
+
+  f->global_tick_counter++;
+  f->position_in_vtx++;
+  if (f->position_in_vtx == f->number_of_vbls)
+    f->position_in_vtx = f->loop_vbl;
+}
+
 /* Players.pas:12915-13004 YM6_Extra_GetRegisters. */
 static void ym6_extra_get_registers(ym_file* f) {
   ay_chip* chip = &f->ay.chip;
@@ -528,7 +784,12 @@ int ym_file_make_buffer(ym_file* f, int16_t* buf, int buffer_length) {
   while (!f->real_end_all && ay->buf_len < buffer_length) {
     if (f->ym6_cur_tik >= f->ym6_tiks_on_int) {
       f->ym6_cur_tik -= f->ym6_tiks_on_int;
-      ym5i_get_registers(f);
+      /* Players.pas:13006-13119 MakeBufferYM5/MakeBufferYM6 - identical
+       * except for which *_Get_Registers variant they call. */
+      if (f->is_ym6)
+        ym6i_get_registers(f);
+      else
+        ym5i_get_registers(f);
     }
     ym6_extra_get_registers(f);
     if ((ay->number_of_tiks >> 32) != 0) {

@@ -37,6 +37,11 @@
  *  - The InitTrackerModule FT.PT3 branch (Players.pas:3717-3806) and the
  *    CaseTrModules FT.PT3 branch's Version derivation (Players.pas:
  *    2577-2582).
+ *  - GetNoteFreq's full 4-way PT3_TonTableId dispatch (Players.pas:
+ *    12304-12322), i.e. all 6 PT3NoteTable_* variants (PT_33_34r/PT_34_35/
+ *    ST/ASM_34r/ASM_34_35/REAL_34r/REAL_34_35, each version-gated except
+ *    ST) - MIG-0040 closes the "only TonTableId=1 supported" gap MIG-0020
+ *    originally left open.
  *
  * Deliberately not ported here (see migration_debt.yaml):
  *  - Turbosound/TSMode (dual-chip PT3, marker-byte-triggered) - confirmed
@@ -45,11 +50,6 @@
  *    is version 7 but its marker byte is blank) - MIG-0007.
  *  - GetTimePT3 (duration/loop-point precompute) - UI-only, not needed
  *    for correct audio playback.
- *  - PT3NoteTable_PT_33_34r / PT_34_35 / ASM_34r / ASM_34_35 / REAL_34r /
- *    REAL_34_35 (5 of the 6 note-pitch table variants GetNoteFreq can
- *    select via PT3_TonTableId) - both real test files have
- *    PT3_TonTableId=1, which always selects PT3NoteTable_ST regardless of
- *    version; the other 5 tables are unexercised.
  *  - Embedded/rebased-pointer PT3 loading (see Scope above) - MAddr is
  *    always 0 for standalone files, so the rebase branch never runs for
  *    either real test file.
@@ -122,6 +122,9 @@ typedef struct pt3_file {
   pt3_channel chan_a, chan_b, chan_c;
 
   int version;               /* PlConsts[n].Version */
+  uint8_t ton_table_id;      /* PT3_TonTableId - selects among 6 note
+                              * tables via GetNoteFreq, see pt3_file.c's
+                              * get_note_freq() */
   uint16_t patterns_pointer; /* PT3_PatternsPointer */
   uint16_t samples_pointers[32];
   uint16_t ornaments_pointers[16];

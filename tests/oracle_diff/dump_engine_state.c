@@ -11,6 +11,18 @@
 #include "ay_engine/ay_file.h"
 #include "ay_engine/ym_file.h"
 #include "ay_engine/pt3_file.h"
+#include "ay_engine/pt1_file.h"
+#include "ay_engine/gtr_file.h"
+#include "ay_engine/fls_file.h"
+#include "ay_engine/stc_file.h"
+#include "ay_engine/stp_file.h"
+#include "ay_engine/pt2_file.h"
+#include "ay_engine/fxm_file.h"
+#include "ay_engine/psm_file.h"
+#include "ay_engine/asc_file.h"
+#include "ay_engine/ftc_file.h"
+#include "ay_engine/psc_file.h"
+#include "ay_engine/sqt_file.h"
 #include "ay_engine/vtx_file.h"
 #include "ay_engine/z80_bus.h"
 #include "ay_engine/m68k_bus.h"
@@ -460,6 +472,452 @@ static void run_pt3_file(const char* out_path, const char* pt3_path) {
   fclose(out);
 }
 
+/* Matches OracleHarness.pas's RunPT1FileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/pt1_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_pt1_file(const char* out_path, const char* pt1_path) {
+  FILE* in = fopen(pt1_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_pt1_file: cannot open %s\n", pt1_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_pt1_file: short read on %s\n", pt1_path);
+    exit(1);
+  }
+  fclose(in);
+
+  pt1_file f;
+  pt1_file_status st = pt1_file_load(&f, data, (size_t)sz, PT1_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != PT1_FILE_OK) {
+    fprintf(stderr, "run_pt1_file: pt1_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    pt1_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunGTRFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/gtr_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_gtr_file(const char* out_path, const char* gtr_path) {
+  FILE* in = fopen(gtr_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_gtr_file: cannot open %s\n", gtr_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_gtr_file: short read on %s\n", gtr_path);
+    exit(1);
+  }
+  fclose(in);
+
+  gtr_file f;
+  gtr_file_status st = gtr_file_load(&f, data, (size_t)sz, GTR_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != GTR_FILE_OK) {
+    fprintf(stderr, "run_gtr_file: gtr_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    gtr_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunFLSFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/fls_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_fls_file(const char* out_path, const char* fls_path) {
+  FILE* in = fopen(fls_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_fls_file: cannot open %s\n", fls_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_fls_file: short read on %s\n", fls_path);
+    exit(1);
+  }
+  fclose(in);
+
+  fls_file f;
+  fls_file_status st = fls_file_load(&f, data, (size_t)sz, FLS_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != FLS_FILE_OK) {
+    fprintf(stderr, "run_fls_file: fls_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    fls_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunSTCFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/stc_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_stc_file(const char* out_path, const char* stc_path) {
+  FILE* in = fopen(stc_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_stc_file: cannot open %s\n", stc_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_stc_file: short read on %s\n", stc_path);
+    exit(1);
+  }
+  fclose(in);
+
+  stc_file f;
+  stc_file_status st = stc_file_load(&f, data, (size_t)sz, STC_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != STC_FILE_OK) {
+    fprintf(stderr, "run_stc_file: stc_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    stc_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunSTPFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/stp_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_stp_file(const char* out_path, const char* stp_path) {
+  FILE* in = fopen(stp_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_stp_file: cannot open %s\n", stp_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_stp_file: short read on %s\n", stp_path);
+    exit(1);
+  }
+  fclose(in);
+
+  stp_file f;
+  stp_file_status st = stp_file_load(&f, data, (size_t)sz, STP_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != STP_FILE_OK) {
+    fprintf(stderr, "run_stp_file: stp_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    stp_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunPT2FileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/pt2_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_pt2_file(const char* out_path, const char* pt2_path) {
+  FILE* in = fopen(pt2_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_pt2_file: cannot open %s\n", pt2_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_pt2_file: short read on %s\n", pt2_path);
+    exit(1);
+  }
+  fclose(in);
+
+  pt2_file f;
+  pt2_file_status st = pt2_file_load(&f, data, (size_t)sz, PT2_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != PT2_FILE_OK) {
+    fprintf(stderr, "run_pt2_file: pt2_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    pt2_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunFXMFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/fxm_file.c
+ * against the real test file (path supplied as argv[3]). Note fxm_file_
+ * load takes the RAW file bytes (it does its own 6-byte-skip/address
+ * handling internally), unlike every other X_file_load in this project. */
+static void run_fxm_file(const char* out_path, const char* fxm_path) {
+  FILE* in = fopen(fxm_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_fxm_file: cannot open %s\n", fxm_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_fxm_file: short read on %s\n", fxm_path);
+    exit(1);
+  }
+  fclose(in);
+
+  fxm_file f;
+  fxm_file_status st = fxm_file_load(&f, data, (size_t)sz, FXM_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != FXM_FILE_OK) {
+    fprintf(stderr, "run_fxm_file: fxm_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    fxm_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunPSMFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/psm_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_psm_file(const char* out_path, const char* psm_path) {
+  FILE* in = fopen(psm_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_psm_file: cannot open %s\n", psm_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_psm_file: short read on %s\n", psm_path);
+    exit(1);
+  }
+  fclose(in);
+
+  psm_file f;
+  psm_file_status st = psm_file_load(&f, data, (size_t)sz, PSM_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != PSM_FILE_OK) {
+    fprintf(stderr, "run_psm_file: psm_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    psm_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunASCFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/asc_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_asc_file(const char* out_path, const char* asc_path, bool is_asc0) {
+  FILE* in = fopen(asc_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_asc_file: cannot open %s\n", asc_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_asc_file: short read on %s\n", asc_path);
+    exit(1);
+  }
+  fclose(in);
+
+  asc_file f;
+  asc_file_status st = asc_file_load(&f, data, (size_t)sz, is_asc0, ASC_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != ASC_FILE_OK) {
+    fprintf(stderr, "run_asc_file: asc_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    asc_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunFTCFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/ftc_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_ftc_file(const char* out_path, const char* ftc_path) {
+  FILE* in = fopen(ftc_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_ftc_file: cannot open %s\n", ftc_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_ftc_file: short read on %s\n", ftc_path);
+    exit(1);
+  }
+  fclose(in);
+
+  ftc_file f;
+  ftc_file_status st = ftc_file_load(&f, data, (size_t)sz, FTC_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != FTC_FILE_OK) {
+    fprintf(stderr, "run_ftc_file: ftc_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    ftc_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunPSCFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/psc_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_psc_file(const char* out_path, const char* psc_path) {
+  FILE* in = fopen(psc_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_psc_file: cannot open %s\n", psc_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_psc_file: short read on %s\n", psc_path);
+    exit(1);
+  }
+  fclose(in);
+
+  psc_file f;
+  psc_file_status st = psc_file_load(&f, data, (size_t)sz, PSC_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != PSC_FILE_OK) {
+    fprintf(stderr, "run_psc_file: psc_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    psc_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
+/* Matches OracleHarness.pas's RunSQTFileTest exactly: same defaults, same
+ * 400x512-stereo16-frame buffer sequence, driving engine/src/sqt_file.c
+ * against the real test file (path supplied as argv[3]). */
+static void run_sqt_file(const char* out_path, const char* sqt_path) {
+  FILE* in = fopen(sqt_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_sqt_file: cannot open %s\n", sqt_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_sqt_file: short read on %s\n", sqt_path);
+    exit(1);
+  }
+  fclose(in);
+
+  sqt_file f;
+  sqt_file_status st = sqt_file_load(&f, data, (size_t)sz, SQT_FILE_SAMPLE_RATE_DEF);
+  free(data);
+  if (st != SQT_FILE_OK) {
+    fprintf(stderr, "run_sqt_file: sqt_file_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  int16_t buf[512 * 2];
+  int n;
+  for (n = 0; n < 400; n++) {
+    sqt_file_make_buffer(&f, buf, 512);
+    fwrite(buf, sizeof(buf), 1, out);
+  }
+  fclose(out);
+}
+
 /* Matches OracleHarness.pas's RunVTXFileTest exactly: same defaults, same
  * 400x512-stereo16-frame buffer sequence, driving engine/src/lh5.c +
  * vtx_file.c against the real test file (path supplied as argv[3]). */
@@ -538,6 +996,84 @@ int main(int argc, char** argv) {
       return 1;
     }
     run_pt3_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "pt1_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s pt1_file <output-path> <pt1-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_pt1_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "gtr_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s gtr_file <output-path> <gtr-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_gtr_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "fls_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s fls_file <output-path> <fls-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_fls_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "stc_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s stc_file <output-path> <stc-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_stc_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "stp_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s stp_file <output-path> <stp-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_stp_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "pt2_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s pt2_file <output-path> <pt2-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_pt2_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "fxm_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s fxm_file <output-path> <fxm-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_fxm_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "psm_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s psm_file <output-path> <psm-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psm_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "asc_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s asc_file <output-path> <asc-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_asc_file(out_path, argv[3], false);
+  } else if (strcmp(scenario, "asc0_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s asc0_file <output-path> <asc0-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_asc_file(out_path, argv[3], true);
+  } else if (strcmp(scenario, "ftc_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s ftc_file <output-path> <ftc-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_ftc_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "psc_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s psc_file <output-path> <psc-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psc_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "sqt_file") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s sqt_file <output-path> <sqt-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_sqt_file(out_path, argv[3]);
   } else if (strcmp(scenario, "vtx_file") == 0) {
     if (argc < 4) {
       fprintf(stderr, "usage: %s vtx_file <output-path> <vtx-file-path>\n", argv[0]);

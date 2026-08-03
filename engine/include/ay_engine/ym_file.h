@@ -29,22 +29,25 @@
  *    YM6TiksOnInt from the file's own ChipFrq/InterFrq header fields
  *    (MainWin.pas:1544-1548,1570,2070-2072) - same bounded-arithmetic-only
  *    approach as engine/ay_file.c's ay_file_set_chip_freq.
+ *  - YM6i_Get_Registers (Players.pas:13121-13385), the extended-YM6
+ *    register reader - MIG-0041 closes the "our real test file was YM5"
+ *    gap MIG-0019 originally left open. Structurally a sibling of
+ *    YM5i_Get_Registers (same 14 register-plane layout) but not a small
+ *    diff of it - see ym_file.c's ym6i_get_registers for the exact
+ *    differences (dynamic per-frame effect-type selection via the top 2
+ *    bits of registers 1/3, instead of YM5's fixed types).
  *
  * Deliberately not ported here (see migration_debt.yaml):
- *  - YM5_Get_Registers / YM6_Get_Registers / YM6i_Get_Registers (the
- *    non-extended-YM5 and both YM6 variants) - our real test file is
- *    extended-YM5; these are structurally similar but unexercised.
+ *  - YM5_Get_Registers / YM6_Get_Registers (the non-extended variants of
+ *    YM5 and YM6) - our real test files are all extended (Song_Attr bit0
+ *    set); these are structurally similar but unexercised.
  *  - Digidrum sample format conversion (YMizeSample / the linear-PCM-to-
- *    YM-amplitude-table lookup, Players.pas:2833-2852) - our real test
- *    file has Num_of_Dig=0, making this dead code for it; the descriptor
- *    table itself IS parsed (ym_file_digidrum) so a future file with real
- *    digidrums fails loudly (index out of range) rather than silently
- *    misplaying, but the samples' bytes are used as-is, unconverted.
- *  - AtariSE1Type/AtariSE2Type values other than what YM5i's own code
- *    path drives (SE1 type 0 "square/hardware-envelope" always; SE2 type
- *    1 "digidrum" is structurally reachable but provably inert for any
- *    file with zero digidrum samples, per Players.pas:13772's
- *    `AtariParam2 >= Length(DDrumSamples)` guard - confirmed for our file).
+ *    YM-amplitude-table lookup, Players.pas:2833-2852) - every real test
+ *    file has Num_of_Dig=0, making this dead code for all of them; the
+ *    descriptor table itself IS parsed (ym_file_digidrum) so a future
+ *    file with real digidrums fails loudly (index out of range) rather
+ *    than silently misplaying, but the samples' bytes are used as-is,
+ *    unconverted.
  *  - YM3/YM3b/YM2/VTX (the simpler, non-LHA, non-extended-header sibling
  *    formats) - a different code path entirely (VTX_YM3_YM3b_Get_Registers
  *    / MakeBufferVTX), out of scope here (VTX gets its own milestone).
@@ -83,10 +86,8 @@ typedef struct ym_file {
   int32_t loop_vbl;       /* Players.pas: LoopVBL */
   int32_t position_in_vtx;
 
-  bool is_ym6; /* magic was YM6! (vs YM5!) - only affects which
-                * Get_Registers variant would be selected; this milestone
-                * only implements the YM5-extended reader (see file
-                * comment), so ym_file_load rejects YM6! for now. */
+  bool is_ym6; /* magic was YM6! (vs YM5!) - selects ym6i_get_registers
+                * vs ym5i_get_registers in ym_file_make_buffer. */
 
   ym_digidrum* digidrums;
   int digidrum_count;
