@@ -1,4 +1,4 @@
-/* Loads a real .sndh file (songs/sndh/Temple_of_Asherah.sndh) end-to-end
+/* Loads a real .sndh file (test_corpus_76/More_Short_Demos.sndh) end-to-end
  * through engine/src/sndh_file.c. KNOWN INCOMPLETE (MIG-0021): the
  * 68000/memory-layout port is verified byte-exact against the real
  * emulator (see migration_debt.yaml), but audio never starts within a
@@ -33,7 +33,7 @@ static uint8_t* read_whole_file(const char* path, size_t* out_size) {
 
 static void test_plays(void) {
   size_t size;
-  uint8_t* data = read_whole_file("../../songs/sndh/Temple_of_Asherah.sndh", &size);
+  uint8_t* data = read_whole_file("../../test_corpus_76/More_Short_Demos.sndh", &size);
   assert(data != NULL);
 
   sndh_file f;

@@ -1,4 +1,4 @@
-/* Loads a real .ay file (songs/cpc/Discmac20_0.ay) end-to-end through
+/* Loads a real .ay file (test_corpus_76/MetalMania.ay) end-to-end through
  * engine/src/ay_file.c and confirms it plays without error and produces
  * audible output - a first for this project's smoke tests, which have
  * otherwise all used synthetic programs. See README.md. */
@@ -26,10 +26,10 @@ static uint8_t* read_whole_file(const char* path, size_t* out_size) {
   return buf;
 }
 
-static void test_discmac_plays(void) {
+static void test_ay_plays(void) {
   size_t size;
-  uint8_t* data = read_whole_file("../../songs/cpc/Discmac20_0.ay", &size);
-  assert(data != NULL && "songs/cpc/Discmac20_0.ay not found");
+  uint8_t* data = read_whole_file("../../test_corpus_76/MetalMania.ay", &size);
+  assert(data != NULL && "test_corpus_76/MetalMania.ay not found");
 
   ay_file f;
   ay_file_status st =
@@ -52,7 +52,7 @@ static void test_discmac_plays(void) {
 
   assert(frames_total > 0);
   assert(any_nonzero && "expected audible output from a real .ay file");
-  printf("test_discmac_plays: OK (%d sample frames, real_end_all=%d)\n",
+  printf("test_ay_plays: OK (%d sample frames, real_end_all=%d)\n",
          frames_total, f.real_end_all);
 
   free(data);
@@ -70,7 +70,7 @@ static void test_bad_header_rejected(void) {
 }
 
 int main(void) {
-  test_discmac_plays();
+  test_ay_plays();
   test_bad_header_rejected();
   printf("All ay_file smoke tests passed.\n");
   return 0;

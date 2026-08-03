@@ -490,7 +490,12 @@ static void run_vtx_file(const char* out_path, const char* vtx_path) {
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
   int n;
-  for (n = 0; n < 400; n++) {
+  /* Mirrors OracleHarness.pas's RunVTXFileTest: `if Real_End_All then
+   * break;` before each MakeBufferVTX call - a fixed 400-buffer loop
+   * with no such check silently over-runs past the real song's end for
+   * any file whose NumberOfVBLs/LoopVBL causes real_end_all to go true
+   * within 400 buffers (unlike songs/vtx/Intro.vtx, which never did). */
+  for (n = 0; n < 400 && !f.real_end_all; n++) {
     vtx_file_make_buffer(&f, buf, 512);
     fwrite(buf, sizeof(buf), 1, out);
   }

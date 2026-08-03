@@ -50,22 +50,21 @@ for pcm_scenario in pcm pcm_filtered pcm8; do
   fi
 done
 
-# ay_file: real Discmac20_0.ay file (songs/cpc/) through the full loader +
-# MakeBufferAY playback loop (engine/src/ay_file.c vs the real Players.pas/
-# Z80.pas/AY.pas code, via OracleHarness.pas's RunAYFileTest). Byte-identical
-# for the whole silent lead-in before the first interrupt-driven register
-# write (bytes 0-3951 of 8192, i.e. sample frames 0-987); diverges by a
-# small (~2 T-state per interrupt-accept event) timing offset after that -
-# same register-write VALUES and SEQUENCE on both sides (confirmed via
-# manual trace comparison), just a few-sample audio-onset timing jitter, not
-# a content bug. Root cause narrowed to interrupt-acceptance/HALT T-state
-# accounting between superzazu/z80 and Z80.pas's live interpreter, not yet
-# pinned to one instruction - see migration_debt.yaml MIG-0018. Compared
-# here as informational (byte-count of the matching prefix), not a hard
-# pass/fail gate, since a full byte-identical match isn't expected yet.
-AY_EMUL_ORACLE=ay_file AY_EMUL_ORACLE_FILE="$ROOT/songs/cpc/Discmac20_0.ay" \
+# ay_file: real MetalMania.ay file (test_corpus_76/, replaces the
+# formerly-used songs/cpc/Discmac20_0.ay - see the "songs/ -> test_corpus_76"
+# migration in migration_debt.yaml) through the full loader + MakeBufferAY
+# playback loop (engine/src/ay_file.c vs the real Players.pas/Z80.pas/AY.pas
+# code, via OracleHarness.pas's RunAYFileTest). Compared here as
+# informational (byte-count of the matching prefix), not a hard pass/fail
+# gate: the previous fixture diverged after its silent lead-in by a small
+# (~2 T-state per interrupt-accept event) timing offset traced to
+# interrupt-acceptance/HALT T-state accounting between superzazu/z80 and
+# Z80.pas's live interpreter (migration_debt.yaml MIG-0018) - a fixture-
+# independent engine characteristic, so the same non-hard-gate treatment
+# applies here without re-deriving fixture-specific byte offsets.
+AY_EMUL_ORACLE=ay_file AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/MetalMania.ay" \
   AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_ay_file.bin" "$ORACLE_BIN"
-./dump_engine_state ay_file "$WORKDIR/engine_ay_file.bin" "$ROOT/songs/cpc/Discmac20_0.ay"
+./dump_engine_state ay_file "$WORKDIR/engine_ay_file.bin" "$ROOT/test_corpus_76/MetalMania.ay"
 if cmp -s "$WORKDIR/oracle_ay_file.bin" "$WORKDIR/engine_ay_file.bin"; then
   echo "[PASS] ay_file: oracle and engine PCM output byte-identical"
 else
@@ -73,13 +72,14 @@ else
   echo "[INFO] ay_file: matches for the first $((prefix - 1)) bytes (known bounded timing debt, MIG-0018), not a hard failure"
 fi
 
-# ym_file: real "The Last V8.ym" file (songs/cpc/, LHA-compressed extended
-# YM5! format) through the full LZH-decompress + loader + MakeBufferYM5
-# playback loop (engine/src/lh5.c + ym_file.c vs the real Players.pas/AY.pas
-# code, via OracleHarness.pas's RunYMFileTest). Byte-identical.
-AY_EMUL_ORACLE=ym_file AY_EMUL_ORACLE_FILE="$ROOT/songs/cpc/The Last V8.ym" \
+# ym_file: real Batman_Journey.ym file (test_corpus_76/, LHA-compressed
+# extended YM5! format, replaces the formerly-used songs/cpc/The Last V8.ym)
+# through the full LZH-decompress + loader + MakeBufferYM5 playback loop
+# (engine/src/lh5.c + ym_file.c vs the real Players.pas/AY.pas code, via
+# OracleHarness.pas's RunYMFileTest). Byte-identical.
+AY_EMUL_ORACLE=ym_file AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/Batman_Journey.ym" \
   AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_ym_file.bin" "$ORACLE_BIN"
-./dump_engine_state ym_file "$WORKDIR/engine_ym_file.bin" "$ROOT/songs/cpc/The Last V8.ym"
+./dump_engine_state ym_file "$WORKDIR/engine_ym_file.bin" "$ROOT/test_corpus_76/Batman_Journey.ym"
 if cmp -s "$WORKDIR/oracle_ym_file.bin" "$WORKDIR/engine_ym_file.bin"; then
   echo "[PASS] ym_file: oracle and engine PCM output byte-identical"
 else
@@ -87,14 +87,16 @@ else
   status=1
 fi
 
-# pt3_file: the two real .pt3 files (songs/pt3/ARTe_ST1.pt3,
-# songs/turbo_sound/Gasman_-_dynamite.pt3) through the full tracker-engine
-# playback loop (engine/src/pt3_file.c vs the real Players.pas/AY.pas code,
-# via OracleHarness.pas's RunPT3FileTest). Byte-identical for both.
-for pt3_name in "pt3/ARTe_ST1.pt3" "turbo_sound/Gasman_-_dynamite.pt3"; do
-  AY_EMUL_ORACLE=pt3_file AY_EMUL_ORACLE_FILE="$ROOT/songs/$pt3_name" \
+# pt3_file: two real .pt3 files (test_corpus_76/ZAGON_07_remixDJ_EchoMAKROSS.pt3 - version 4,
+# test_corpus_76/ZELiNAPI.pt3 - version 7, turbo_sound=no per
+# identify_ay_file - replacing the formerly-used songs/pt3/ARTe_ST1.pt3 and
+# songs/turbo_sound/Gasman_-_dynamite.pt3, same version spread) through the
+# full tracker-engine playback loop (engine/src/pt3_file.c vs the real
+# Players.pas/AY.pas code, via OracleHarness.pas's RunPT3FileTest).
+for pt3_name in "ZAGON_07_remixDJ_EchoMAKROSS.pt3" "ZELiNAPI.pt3"; do
+  AY_EMUL_ORACLE=pt3_file AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/$pt3_name" \
     AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_pt3.bin" "$ORACLE_BIN"
-  ./dump_engine_state pt3_file "$WORKDIR/engine_pt3.bin" "$ROOT/songs/$pt3_name"
+  ./dump_engine_state pt3_file "$WORKDIR/engine_pt3.bin" "$ROOT/test_corpus_76/$pt3_name"
   if cmp -s "$WORKDIR/oracle_pt3.bin" "$WORKDIR/engine_pt3.bin"; then
     echo "[PASS] pt3_file ($pt3_name): oracle and engine PCM output byte-identical"
   else
@@ -103,13 +105,14 @@ for pt3_name in "pt3/ARTe_ST1.pt3" "turbo_sound/Gasman_-_dynamite.pt3"; do
   fi
 done
 
-# vtx_file: real Intro.vtx file (songs/vtx/) through the full lh5-decompress
-# + loader + MakeBufferVTX playback loop (engine/src/lh5.c + vtx_file.c vs
-# the real Players.pas/AY.pas code, via OracleHarness.pas's RunVTXFileTest).
-# Byte-identical.
-AY_EMUL_ORACLE=vtx_file AY_EMUL_ORACLE_FILE="$ROOT/songs/vtx/Intro.vtx" \
+# vtx_file: real GB2_5.vtx file (test_corpus_76/, long-header "ay"-chip-type
+# variant, matching the formerly-used songs/vtx/Intro.vtx's characteristics)
+# through the full lh5-decompress + loader + MakeBufferVTX playback loop
+# (engine/src/lh5.c + vtx_file.c vs the real Players.pas/AY.pas code, via
+# OracleHarness.pas's RunVTXFileTest).
+AY_EMUL_ORACLE=vtx_file AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/GB2_5.vtx" \
   AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_vtx_file.bin" "$ORACLE_BIN"
-./dump_engine_state vtx_file "$WORKDIR/engine_vtx_file.bin" "$ROOT/songs/vtx/Intro.vtx"
+./dump_engine_state vtx_file "$WORKDIR/engine_vtx_file.bin" "$ROOT/test_corpus_76/GB2_5.vtx"
 if cmp -s "$WORKDIR/oracle_vtx_file.bin" "$WORKDIR/engine_vtx_file.bin"; then
   echo "[PASS] vtx_file: oracle and engine PCM output byte-identical"
 else

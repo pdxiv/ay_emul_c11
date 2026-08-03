@@ -1,4 +1,4 @@
-/* Loads a real .vtx file (songs/vtx/Intro.vtx) end-to-end through
+/* Loads a real .vtx file (test_corpus_76/GB2_5.vtx) end-to-end through
  * engine/src/lh5.c + vtx_file.c and confirms it plays without error and
  * produces audible output. See README.md. */
 #include <assert.h>
@@ -27,7 +27,7 @@ static uint8_t* read_whole_file(const char* path, size_t* out_size) {
 
 static void test_plays(void) {
   size_t size;
-  uint8_t* data = read_whole_file("../../songs/vtx/Intro.vtx", &size);
+  uint8_t* data = read_whole_file("../../test_corpus_76/GB2_5.vtx", &size);
   assert(data != NULL);
 
   vtx_file f;

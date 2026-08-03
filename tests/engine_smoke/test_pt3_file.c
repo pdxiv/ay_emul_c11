@@ -1,5 +1,5 @@
-/* Loads the two real .pt3 files (songs/pt3/ARTe_ST1.pt3,
- * songs/turbo_sound/Gasman_-_dynamite.pt3) end-to-end through
+/* Loads the two real .pt3 files (test_corpus_76/ZAGON_07_remixDJ_EchoMAKROSS.pt3,
+ * test_corpus_76/ZELiNAPI.pt3) end-to-end through
  * engine/src/pt3_file.c and confirms both play without error and produce
  * audible output. See README.md. */
 #include <assert.h>
@@ -65,8 +65,8 @@ static void test_bad_header_rejected(void) {
 }
 
 int main(void) {
-  test_plays("../../songs/pt3/ARTe_ST1.pt3");
-  test_plays("../../songs/turbo_sound/Gasman_-_dynamite.pt3");
+  test_plays("../../test_corpus_76/ZAGON_07_remixDJ_EchoMAKROSS.pt3");
+  test_plays("../../test_corpus_76/ZELiNAPI.pt3");
   test_bad_header_rejected();
   printf("All pt3_file smoke tests passed.\n");
   return 0;

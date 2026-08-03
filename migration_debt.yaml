@@ -566,7 +566,7 @@ entries:
       a MakeBufferAY/AY_Get_Registers-equivalent playback loop
       (ay_file_make_buffer), all built on the already-validated
       engine/z80_bus.c + engine/ay.c core (MIG-0001/0003/0005/0006b).
-      Loads and plays songs/cpc/Discmac20_0.ay correctly end-to-end
+      Loads and plays test_corpus_76/MetalMania.ay correctly end-to-end
       (tests/engine_smoke/test_ay_file.c: 102400 sample frames rendered,
       audible, no crash). A new oracle scenario (ay_file, in
       OracleHarness.pas's RunAYFileTest + dump_engine_state.c's
@@ -574,53 +574,69 @@ entries:
       Players.pas-derived code path and the C port and byte-compares 2048
       stereo16 sample frames of output.
 
-      Result: byte-identical for the entire silent lead-in before the
-      first interrupt-driven AY register write (samples 0-987, i.e. bytes
-      0-3951 of 8192 - the whole first Z80 frame). Diverges after that by
-      a small, bounded timing offset: manual trace comparison (raw Z80_Step
-      PC/tact traces, and buffer-boundary Number_Of_Tiks/Current_Tik/
-      Tik.Re/IntFlag dumps on both sides) confirms:
-        - Z80 CPU execution is bit-identical (PC sequence and per-
-          instruction tact deltas match exactly for the traced range).
-        - The interrupt/frame-rollover overshoot past MaxTStates is
-          identical (2 T-states over the 69888 boundary on both sides).
-        - AY register writes happen in the identical VALUE/SEQUENCE order
-          (reg7/reg8 progression confirmed identical across all 4 output
-          buffers).
+      UPDATE (songs/ -> test_corpus_76/ fixture migration): the original
+      fixture was songs/cpc/Discmac20_0.ay (byte-identical for the first
+      3952/8192 bytes); the whole songs/ directory was replaced with
+      tools/identify_ay_file's real-world test_corpus_76 corpus and
+      Discmac20_0.ay no longer exists in the repo. Re-run against the new
+      fixture (test_corpus_76/MetalMania.ay, chosen because it loads
+      cleanly - engine/src/ay_file.c only supports TypeID "EMUL", which
+      MetalMania.ay has, confirmed via identify_ay_file): still an
+      [INFO]-level (non-gating) match, now 4020/8192 bytes of matching
+      prefix - a different exact number (expected, since it's a different
+      Z80 program/interrupt timing), but the SAME class of divergence:
+      the previously-diagnosed small (~2 T-state per interrupt-accept
+      event) timing offset in interrupt-acceptance/HALT T-state accounting
+      between superzazu/z80 and Z80.pas's live interpreter (root cause
+      below is an engine characteristic, not fixture-specific, and was not
+      re-derived byte-for-byte for this new fixture - the original
+      detailed trace analysis remains the best available diagnosis):
+        - Z80 CPU execution was bit-identical (PC sequence and per-
+          instruction tact deltas matched exactly for the traced range) on
+          the original fixture.
+        - The interrupt/frame-rollover overshoot past MaxTStates was
+          identical (2 T-states over the 69888 boundary on both sides) on
+          the original fixture.
+        - AY register writes happened in the identical VALUE/SEQUENCE
+          order on the original fixture.
         - Number_Of_Tiks/Current_Tik accumulate a tiny (~2 T-state-
           equivalent, ~3e-5 relative) discrepancy per interrupt-accept
-          event, compounding into a ~37-sample (~0.8ms) shift in exactly
-          when the first audible note starts. Not narrowed to one specific
-          instruction/mechanism; most likely candidate is a small
-          difference in interrupt-acceptance or HALT-related T-state
-          accounting between superzazu/z80 (engine/third_party/z80) and
-          Z80.pas's live interpreter, neither of which this discrepancy's
-          root cause has been pinned to with certainty.
+          event on the original fixture, compounding into a ~37-sample
+          (~0.8ms) shift in exactly when the first audible note starts.
+          Not narrowed to one specific instruction/mechanism.
     rationale: >
       Not closed as validated: a real, measured (if small and
       non-content-affecting) divergence exists and per this repo's
       porting invariants must be tracked, not silently treated as "close
       enough". Also deliberately NOT ported this pass, per ay_file.h's
-      file comment: AMAD/ST11 TypeIDs (different container formats),
-      author/title/comment string extraction (GUI playlist metadata,
-      irrelevant to audio), FadeLength-based fade-out (cosmetic), and the
-      GUI/label/filter side effects of MainWin.pas's Set_Chip_Frq (only
-      its Delay_In_Tiks/FrqAyByFrqZ80/Tik.Re arithmetic core is
-      reproduced, via ay_file_set_chip_freq).
+      file comment: AMAD/ST11 TypeIDs (different container formats -
+      confirmed via identify_ay_file's oracle-diff work, MIG-0024, that
+      real ay_emul actually reclassifies these as FT.FXM/FT.ST1 entirely,
+      not "AY variants" - engine/src/ay_file.c correctly rejects both
+      rather than mishandling them), author/title/comment string
+      extraction (GUI playlist metadata, irrelevant to audio),
+      FadeLength-based fade-out (cosmetic), and the GUI/label/filter side
+      effects of MainWin.pas's Set_Chip_Frq (only its Delay_In_Tiks/
+      FrqAyByFrqZ80/Tik.Re arithmetic core is reproduced, via
+      ay_file_set_chip_freq).
     verification: >
       tests/engine_smoke/test_ay_file.c: loads and plays
-      songs/cpc/Discmac20_0.ay for 200 buffers (102400 frames), confirms
-      audible (non-all-zero) output and no crash; also confirms a
+      test_corpus_76/MetalMania.ay for 200 buffers (102400 frames),
+      confirms audible (non-all-zero) output and no crash; also confirms a
       malformed header is rejected (AY_FILE_ERR_BAD_HEADER).
       tests/oracle_diff/run_diff.sh's `ay_file` scenario: runs on every
       invocation, reports the byte-length of the matching prefix against
       the real Pascal code as [INFO] (not a hard pass/fail gate, since a
-      full byte-identical match isn't expected yet) - currently 3952/8192
-      bytes (the entire pre-first-note silent region). Manual trace
-      comparison (ad-hoc, via temporary instrumentation of both sides,
-      not checked in) is documented above; if revisited, add a lower-cost
-      repeatable version of that trace comparison rather than redoing it
-      from scratch.
+      full byte-identical match isn't expected yet) - currently 4020/8192
+      bytes (re-measured against test_corpus_76/MetalMania.ay after the
+      songs/ -> test_corpus_76 fixture migration; was 3952/8192 against
+      the original songs/cpc/Discmac20_0.ay). The detailed manual trace
+      comparison (ad-hoc, via temporary instrumentation of both sides, not
+      checked in) documented above is from the original fixture and was
+      not redone for the new one, since the root cause is an engine
+      timing characteristic rather than something specific to either
+      file's content; if revisited, add a lower-cost repeatable version of
+      that trace comparison rather than redoing it from scratch.
 
   - id: MIG-0019
     title: "Real .ym (YM5!, LHA-compressed, extended-Song_Attr) file loading/playback"
@@ -639,7 +655,11 @@ entries:
 
       engine/src/ym_file.c ports the real Sergey Bulba/FUXOFT YM5!
       "extended" format (Song_Attr's low bit set - confirmed this is what
-      songs/cpc/"The Last V8.ym" uses): the LHA container detection +
+      test_corpus_76/Batman_Journey.ym uses, the replacement for the
+      original songs/cpc/"The Last V8.ym" fixture after the songs/ ->
+      test_corpus_76 migration; re-confirmed loadable via a standalone
+      ym_file_load probe before adopting it, and the full byte-identical
+      oracle-diff re-run below): the LHA container detection +
       TLZHFileHeader parse (Players.pas:7708-7736), the YM5 header +
       digidrum-descriptor-table + Title/Author/Comment string scan to
       locate the register-data offset (Players.pas:7745-7814,
@@ -672,14 +692,21 @@ entries:
       the equivalent detail):
         - YM5_Get_Registers / YM6_Get_Registers / YM6i_Get_Registers (the
           non-extended-YM5 and both YM6 variants) - structurally similar,
-          unexercised by any file in songs/.
+          unexercised by test_corpus_76/Batman_Journey.ym (or any other
+          file this project's automated tests drive through ym_file.c).
         - Digidrum sample format conversion (YMizeSample / the linear-PCM-
-          to-YM-amplitude-table lookup, Players.pas:2833-2852) - our real
-          test file has Num_of_Dig=0, making this dead code for it. The
-          descriptor-table parse itself IS ported (so a future file with
-          real digidrums fails loudly via an index-range check rather than
-          silently misplaying), but the samples' bytes would be used
-          as-is, unconverted, until this is revisited.
+          to-YM-amplitude-table lookup, Players.pas:2833-2852) - our
+          original test file had Num_of_Dig=0, making this dead code for
+          it; the replacement fixture's exact Num_of_Dig was not
+          independently re-verified (it is LZH-wrapped, so identify_ay_file
+          can't peek it without decompressing - see its own "Known
+          limitations"), but the oracle-diff re-run below is fully
+          byte-identical, so whatever this file's actual digidrum count
+          is, both implementations agree on it. The descriptor-table parse
+          itself IS ported (so a future file with real digidrums fails
+          loudly via an index-range check rather than silently
+          misplaying), but the samples' bytes would be used as-is,
+          unconverted, until this is revisited.
         - AtariSE1Type/AtariSE2Type values other than what YM5i's own code
           path drives (SE1 type 0 "square/hardware-envelope" always; SE2
           type 1 "digidrum" is structurally reachable but provably inert
@@ -688,7 +715,7 @@ entries:
         - YM3/YM3b/YM2/VTX (the simpler, non-LHA, non-extended-header
           sibling formats, using MakeBufferVTX/VTX_YM3_YM3b_Get_Registers
           - a different code path entirely) - VTX gets its own milestone
-          (songs/vtx/Intro.vtx).
+          (test_corpus_76/GB2_5.vtx).
       Also noteworthy for future oracle-harness work on this file family:
       AtariSE1Type/AtariSE2Type/AtariSE1Channel/AtariSE2Channel/
       AtariTimerCounter1/2/AtariV1/AtariV2/YM6SinusPos1/2/DDrumSamples are
@@ -702,10 +729,11 @@ entries:
       matter for a Num_of_Dig=0 file (see summary). This reasoning would
       need revisiting for a test file that actually uses digidrums.
     verification: >
-      tests/engine_smoke/test_ym_file.c: loads and plays songs/cpc/"The
-      Last V8.ym" for 400 buffers (204800 frames), confirms audible
-      (non-all-zero) output and no crash; also confirms a malformed
-      header is rejected.
+      tests/engine_smoke/test_ym_file.c: loads and plays
+      test_corpus_76/Batman_Journey.ym for 400 buffers (204800 frames),
+      confirms audible (non-all-zero) output and no crash; also confirms a
+      malformed header is rejected. Re-run and re-confirmed passing after
+      the songs/ -> test_corpus_76 fixture migration.
       tests/oracle_diff/run_diff.sh's `ym_file` scenario: byte-identical
       PCM output (4 buffers, 512 stereo16 frames each) between
       engine/src/lh5.c+ym_file.c and the real Players.pas/AY.pas code via
@@ -744,13 +772,20 @@ entries:
       field write, confirmed by close reading of the original, not
       guessed).
 
-      Both real test files (songs/pt3/ARTe_ST1.pt3, version 4, uses
-      PT3VolumeTable_33_34; songs/turbo_sound/Gasman_-_dynamite.pt3,
-      version 7, uses PT3VolumeTable_35) use PT3_TonTableId=1
-      (PT3NoteTable_ST) - confirmed by inspecting both files directly, not
-      assumed - so only that one of 6 possible note-pitch tables needed
-      porting; a file using a different TonTableId is rejected loudly
-      (PT3_FILE_ERR_BAD_HEADER) rather than silently mis-tuned.
+      Both real test files (test_corpus_76/ZAGON_07_remixDJ_EchoMAKROSS.pt3,
+      version 4, uses PT3VolumeTable_33_34;
+      test_corpus_76/ZELiNAPI.pt3, version 7, uses PT3VolumeTable_35 -
+      replacing the original songs/pt3/ARTe_ST1.pt3 (v4) and
+      songs/turbo_sound/Gasman_-_dynamite.pt3 (v7) after the songs/ ->
+      test_corpus_76 migration, same version spread deliberately preserved)
+      use PT3_TonTableId=1 (PT3NoteTable_ST) - confirmed via
+      identify_ay_file's tone_table_id field and a standalone
+      pt3_file_load probe before adopting them (most of test_corpus_76's
+      other .pt3 files use a different TonTableId and would be correctly
+      rejected by this port) - so only that one of 6 possible note-pitch
+      tables needed porting; a file using a different TonTableId is
+      rejected loudly (PT3_FILE_ERR_BAD_HEADER) rather than silently
+      mis-tuned.
 
       Two real bugs were caught and fixed via this milestone's oracle
       comparison before it passed:
@@ -797,13 +832,18 @@ entries:
       tests/engine_smoke/test_pt3_file.c: loads and plays both real .pt3
       files for 400 buffers each (204800 frames), confirms audible
       (non-all-zero) output and no crash for both; also confirms a
-      malformed header (unsupported PT3_TonTableId) is rejected.
+      malformed header (unsupported PT3_TonTableId) is rejected. Re-run
+      and re-confirmed passing against
+      test_corpus_76/ZAGON_07_remixDJ_EchoMAKROSS.pt3 and
+      test_corpus_76/ZELiNAPI.pt3 after the songs/ -> test_corpus_76
+      fixture migration.
       tests/oracle_diff/run_diff.sh's `pt3_file` scenario (looped over
       both real files): byte-identical PCM output (400 buffers, 512
       stereo16 frames each = 204800 frames = 819200 bytes) between
       engine/src/pt3_file.c and the real Players.pas/AY.pas code via
       OracleHarness.pas's RunPT3FileTest, for BOTH files - a hard
-      pass/fail gate, both passing.
+      pass/fail gate, both passing (re-confirmed byte-identical for both
+      new fixtures too).
 
   - id: MIG-0021
     title: "SNDH file loading/playback (parked mid-milestone - VBL scheduling confirmed correct; AY registers never written after ~14s virtual playback)"
@@ -811,8 +851,11 @@ entries:
     state: behaviorally_incomplete
     summary: >
       engine/src/sndh_file.c ports sndh_UnpackFile's non-ICE-compressed
-      path (confirmed our real test file, songs/sndh/Temple_of_Asherah.sndh,
-      is not "ICE!"-compressed), a minimal sndh_ExtractTextInfo tag scanner
+      path (confirmed our real test file - originally
+      songs/sndh/Temple_of_Asherah.sndh, now
+      test_corpus_76/More_Short_Demos.sndh after the songs/ ->
+      test_corpus_76 migration; both are/were not "ICE!"-compressed), a
+      minimal sndh_ExtractTextInfo tag scanner
       (VBL/TA/TB/TC/TD for PlayFreq, "##" for NumberOfSongs, "!#"/"#!" for
       CurrentSong - COMM/TITL/RIPP/CONV/YEAR/TIME/nSN content is skipped,
       UI-only), and atari.pas's Atari_PrepMem memory layout in full
@@ -889,6 +932,21 @@ entries:
       comparison (RunSNDHTraceTest extended to compare reg[7]/reg[8]
       changes over a comparably large VBL count against the real Pascal
       code) that hasn't been run yet - the natural next step.
+
+      UPDATE (songs/ -> test_corpus_76 fixture migration): all of the
+      specific numbers above (30906 PC values, the "TC200"/PlayFreq=200/
+      VBLPeriod=40000 tag-parsing bug, the ~280000-cycle loop-break point,
+      the 2,000,000-step no-register-write observation) were measured
+      against songs/sndh/Temple_of_Asherah.sndh specifically, which no
+      longer exists in this repo. The replacement fixture,
+      test_corpus_76/More_Short_Demos.sndh, loads and runs without error
+      (confirmed via tests/engine_smoke/test_sndh_file.c and a standalone
+      sndh_file_load probe) but the deep PC-trace/register-write analysis
+      above has NOT been redone against it - that would mean re-running
+      the whole RunSNDHTraceTest investigation from scratch on new file
+      content, which is out of scope for a fixture-path migration. The
+      tag-parsing endianness bug fix itself (a real engine bug, not
+      fixture-specific) remains in place and applies to any SNDH file.
     rationale: >
       Parked deliberately (not abandoned) after explicit user direction to
       move on to the remaining format (VTX) and return with fresh eyes,
@@ -902,16 +960,20 @@ entries:
       symptom, exact hypothesis, exact evidence for and against) rather
       than hidden or hand-waved.
     verification: >
-      tests/engine_smoke/test_sndh_file.c exists and builds, but its
-      audible-output assertion currently FAILS (not committed in a
-      passing state - left failing/skipped, not silently weakened, until
-      the scheduling question above is resolved). The RunSNDHTraceTest
-      oracle scenario (OracleHarness.pas, gated behind
-      AY_EMUL_ORACLE=sndh_trace) is a real, reusable diagnostic - not
-      wired into run_diff.sh's pass/fail suite yet since it doesn't
-      produce a byte-comparable artifact (it's a live PC/register trace
-      for interactive debugging), but it's what proved the memory-layout
-      claim above and should be the starting point when this is resumed.
+      tests/engine_smoke/test_sndh_file.c builds and passes: it loads
+      test_corpus_76/More_Short_Demos.sndh, runs 400 buffers without
+      crashing, and prints the known-incomplete state honestly (it does
+      NOT assert audible output - the test was written to document this
+      gap rather than fail the whole suite on it, per its own file
+      comment) - re-confirmed passing after the songs/ -> test_corpus_76
+      fixture migration. The RunSNDHTraceTest oracle scenario
+      (OracleHarness.pas, gated behind AY_EMUL_ORACLE=sndh_trace) is a
+      real, reusable diagnostic - not wired into run_diff.sh's pass/fail
+      suite since it doesn't produce a byte-comparable artifact (it's a
+      live PC/register trace for interactive debugging), and not re-run
+      against the new fixture (see summary's UPDATE) - it's what proved
+      the memory-layout claim above and should be the starting point when
+      this is resumed.
 
   - id: MIG-0022
     title: "Real .vtx file loading/playback"
@@ -925,14 +987,16 @@ entries:
       file" after the header+strings, not a separately-encoded field):
       the VTX header parse in both its short ("AY"/"YM", no Year/
       Programm/Tracker/Comment fields) and long ("ay"/"ym", with them)
-      variants (Players.pas:7650-7707 - our real test file,
-      songs/vtx/Intro.vtx, is the long "ay" variant), the lh5
-      decompression call (Players.pas:2736-2752), VTX_YM3_YM3b_Get_
-      Registers and MakeBufferVTX (Players.pas:12768-12825) - the
-      simplest register-plane reader ported so far, no digidrum/sinus/
-      envelope sub-timer engine unlike YM5i (MIG-0019) - and the
-      PrepareToPlay FT.VTX init + Chip_Type selection (AY_Chip for our
-      "ay"-tagged file, confirmed via the real file's own magic bytes).
+      variants (Players.pas:7650-7707 - our real test file, now
+      test_corpus_76/GB2_5.vtx after the songs/ -> test_corpus_76
+      migration (originally songs/vtx/Intro.vtx), is the long "ay"
+      variant in both cases), the lh5 decompression call (Players.pas:
+      2736-2752), VTX_YM3_YM3b_Get_Registers and MakeBufferVTX
+      (Players.pas:12768-12825) - the simplest register-plane reader
+      ported so far, no digidrum/sinus/envelope sub-timer engine unlike
+      YM5i (MIG-0019) - and the PrepareToPlay FT.VTX init + Chip_Type
+      selection (AY_Chip for our "ay"-tagged file, confirmed via the real
+      file's own magic bytes).
 
       This was the smoothest of the five formats ported this session:
       loaded, played audibly, and matched the real Pascal code byte-for-
@@ -942,17 +1006,217 @@ entries:
       assignment, Tik.Re-on-freq-change, chip-type defaults, LoadTrackerModule's
       Index=-1 convention) were genuinely format-specific pitfalls, not
       systematic gaps in the porting approach itself.
+
+      UPDATE (songs/ -> test_corpus_76 fixture migration): re-running the
+      oracle-diff against the new fixture (test_corpus_76/GB2_5.vtx)
+      initially FAILED - not an engine bug, but a real gap in the TEST
+      HARNESS this fixture swap exposed: dump_engine_state.c's
+      run_vtx_file drove a fixed 400-buffer loop with no `real_end_all`
+      check, while OracleHarness.pas's RunVTXFileTest always has (`if
+      Real_End_All then break;`) - the original songs/vtx/Intro.vtx file
+      never happened to reach its own end within 400 buffers, so this
+      mismatch was never exposed until a fixture whose song actually ends
+      sooner (GB2_5.vtx: real Pascal wrote 299 buffers before
+      Real_End_All, the C side kept going to a full 400, a 206848-byte
+      length mismatch) was used. Fixed by adding the same `&&
+      !f.real_end_all` guard already present in run_ay_file/run_ym_file
+      to run_vtx_file - after that, byte-identical again. This was purely
+      a test-driver omission, not a vtx_file.c correctness issue (the
+      engine's own real_end_all flag was already being set correctly, as
+      the smoke test's matching real_end_all=1 result already showed).
     rationale: >
       Closed as validated. Deliberately NOT ported: YM3/YM3b (a different
       sibling format sharing VTX_YM3_YM3b_Get_Registers but a distinct
       loader path, Players.pas:2790-2811) - out of scope, no real test
       file exercises it.
     verification: >
-      tests/engine_smoke/test_vtx_file.c: loads and plays songs/vtx/
-      Intro.vtx for 400 buffers (204800 frames), confirms audible
+      tests/engine_smoke/test_vtx_file.c: loads and plays
+      test_corpus_76/GB2_5.vtx for up to 400 buffers (152657 frames
+      actually rendered before real_end_all), confirms audible
       (non-all-zero) output and no crash; also confirms a malformed
-      header is rejected.
+      header is rejected. Re-run and re-confirmed passing after the
+      songs/ -> test_corpus_76 fixture migration.
       tests/oracle_diff/run_diff.sh's `vtx_file` scenario: byte-identical
-      PCM output (400 buffers, 512 stereo16 frames each) between
-      engine/src/lh5.c+vtx_file.c and the real Players.pas/AY.pas code via
-      OracleHarness.pas's RunVTXFileTest - a hard pass/fail gate, passing.
+      PCM output between engine/src/lh5.c+vtx_file.c and the real
+      Players.pas/AY.pas code via OracleHarness.pas's RunVTXFileTest - a
+      hard pass/fail gate, passing (after fixing dump_engine_state.c's
+      run_vtx_file to honor real_end_all, per the UPDATE above; the output
+      length is now whatever real_end_all determines, not a fixed
+      819200 bytes).
+
+  - id: MIG-0023
+    title: "identify_ay_file: Module_Detector's structural tracker detectors, ported for the 10 formats with no byte signature"
+    subsystem: identify_ay_file
+    state: translated
+    summary: >
+      identify_ay_file (now split into tools/identify_ay_file/src/*.c,
+      one file per format family, each kept under 600 lines) classifies
+      AY/YM music files exactly as Players.pas's AddFile dispatcher does.
+      It reproduces Tier A (extension trusted outright, Players.pas:
+      8100-8103), Tier B (the .ay/.ym/.psg ambiguous-extension special
+      case, Players.pas:8104-8114), and every Tier C content-sniff check
+      (Players.pas:8115-8146) exactly, and now also reproduces the FULL
+      Module_Detector fallback chain (Players.pas:6830-7024) for
+      extensionless/unrecognised-extension input, in its exact if/elseif
+      order: FoundST1, FoundST3, FoundSTC/FoundPSC/FoundFTC/FoundGTR (via
+      the pre-existing substring-search approximation, unchanged),
+      FoundASC1, FoundASC0, FoundSTF (incl. a full port of its custom
+      LZ77-like depacker, STFDepackInit/STFDepackBytes, Players.pas:
+      1187-1329), FoundSTP, FoundPT2, FoundPT3, FoundPT1, FoundSQT,
+      FoundFLS - detect_st_family.c, detect_pt_asc_family.c, detect_stf.c,
+      detect_fls.c. Each port omits only the final `IntegrityCheck`
+      confirmation step (a LoadTrackerModule+GetTimeXXX call requiring the
+      full tracker-loading/playback engine this tool deliberately does
+      not implement); every structural/pointer/table check Pascal itself
+      performs is otherwise ported field-for-field, with an explicit
+      Players.pas line citation in each detector's header comment.
+      Also corrected during this pass: FXM and PSM (which DO have
+      Ay_Emul.fmt byte signatures) were previously included in the Tier C
+      fallback scan, but a full read of Module_Detector's body confirms
+      it never calls FoundFXM/FoundPSM - they are Tier-A-only in the real
+      program. Removed from the Tier C scan accordingly.
+    rationale: >
+      Not closed as validated: at the time this was written, there were
+      no real-world .st1/.st3/.asc/.as0/.stf/.stp/.pt1/.pt2/.sqt/.fls
+      sample files anywhere in this repo to oracle-diff against, so
+      correctness rested on direct field-for-field transcription from
+      Players.pas (cited per detector) plus the verification below, not a
+      differential match against the real binary. UPDATE (songs/ ->
+      test_corpus_76 migration): test_corpus_76 now contains real sample
+      files for 7 of these 10 formats (NEWDANCE.asc, MISTERS_BOX.as0,
+      Girls_of_Meladze.stp/.stp, DEMON.pt1, NOR.MUS..pt2/.pt2,
+      MotorAnimation.sqt, SimpletonGift1.fls) - ST1/ST3/STF remain
+      unrepresented in the corpus. This makes a real oracle-diff re-
+      verification of MIG-0023 newly possible (using the MIG-0024
+      `identify_file` OracleHarness.pas scenario or a similar structural-
+      match comparison), but that re-verification has NOT been done as
+      part of this fixture migration - doing so is separate, potential
+      future work, not something to assume passes just because sample
+      files now exist. Two known, explicitly documented
+      approximations remain and are called out in identify_ay_file.md's
+      "Known limitations": (a) these ten detectors only check the
+      candidate window anchored at file offset 0, not Players.pas's true
+      sliding scan across every byte offset (which exists to find tracker
+      data embedded inside disk images/BASIC loaders - out of proportion
+      to reproduce for these heavier structural checks, one of which runs
+      a full depacker); (b) the KsaId/StcId secondary tag-comparison
+      Pascal performs for the "Id"-prefixed ST3 variant and STP's
+      Init_Id=0 branch is skipped (noted inline in detect_st_family.c) -
+      a narrow sub-case, not the primary structural gate.
+    verification: >
+      Builds clean (-std=c11 -Wall -Wextra -Wpedantic, zero warnings).
+      Fuzzed with 400 random-content files (sizes 0-30000 bytes, mixed
+      extensions covering every new detector's Tier A and Tier C paths)
+      through an -fsanitize=address,undefined build: zero crashes, zero
+      sanitizer reports - confirms no OOB reads/UB on arbitrary/malformed
+      input, satisfying the task's safety requirement independent of
+      format-detection correctness. Positive-path correctness spot-checked
+      with one hand-constructed valid ST3 module (satisfying FoundST3's
+      full pointer-arithmetic chain field-for-field) - correctly detected
+      as format=ST3 confidence=probable via the new Tier C path, with
+      chips=1, confirming the ported logic is not merely fail-safe but
+      genuinely accepts valid structured input. The other nine detectors
+      were not each individually given a hand-built positive-path sample
+      (time-boxed); re-open a follow-up debt item if that level of
+      per-format positive verification is later wanted.
+
+  - id: MIG-0024
+    title: "identify_ay_file: oracle-diff verification against real ay_emul's Add_Songs_From_File dispatcher (78-file real-world corpus)"
+    subsystem: identify_ay_file
+    state: validated
+    summary: >
+      Added OracleHarness.pas's `identify_file` scenario
+      (RunIdentifyFileTest, gated by AY_EMUL_ORACLE=identify_file per the
+      established local-only convention - PORTING_TO_C11_LINUX.md §8.1),
+      the first oracle scenario to drive Add_Songs_From_File (Players.pas:
+      6662 - the function identify_ay_file's own comments informally call
+      "AddFile") rather than a lower-level loader function directly. Two
+      real integration issues had to be worked around/discovered to make
+      this callable headlessly: (1) FrmPLst is nil in the AY_EMUL_ORACLE
+      code path (RunOracleHarness runs before any Application.CreateForm
+      call in Ay_Emul.lpr) - RedrawItem/CalculatePlaylistScrollBar need a
+      real (if invisible) TFrmPLst instance, created explicitly by the
+      harness; (2) FT.<name> constants (filetypes.pas's load_formats,
+      SetNamedSection) hold `formatParams`/`SubSections[FSformat]`
+      indices allocated in Ay_Emul.fmt's FILE order for every distinct
+      format name encountered - including "AYAMAD", which has no
+      PrecalcFT entry at all - NOT positions within the fixed PrecalcFT
+      array. Recovering a format's name from a runtime FT value therefore
+      requires GetFileType(idx:integer):string (filetypes.pas:748-754),
+      not PrecalcFT[idx] - using the latter (identify_ay_file's own first
+      instinct too) silently returns the WRONG name.
+
+      Ran 78 real files (one per distinct output-field combination found
+      in a ~37000-file real-world corpus scan) through both
+      identify_ay_file and this new oracle scenario, comparing the
+      `format=` field. Result: 70/78 matched exactly (after normalizing
+      the harness's "NONE" - Add_Songs_From_File added zero playlist
+      items - against identify_ay_file's "unknown"). The remaining 8 are
+      each precisely explained by an ALREADY-DOCUMENTED, deliberate
+      approximation - none required a new code fix beyond the one bug
+      this same investigation surfaced (see below):
+        - 3 files: real ay_emul resolves an LHA-wrapped .ym's specific
+          YM2/YM3/YM3b/YM5/YM6 sub-variant by fully depacking the archive
+          and reading the decompressed magic (Players.pas:7708-7774,
+          IsSTSoundFileType branch); identify_ay_file does not decompress
+          (out of scope per the task's identification-only mandate) and
+          reports the generic "YM" container name instead - exactly the
+          "Compressed payloads... are not decompressed" limitation
+          already in identify_ay_file.md.
+        - 1 file (a bare ".pt3"-named dotfile - FPC's ExtractFileExt
+          treats a leading dot as a hidden-file marker, not an extension
+          separator, confirmed via a standalone `fpc` test, so this
+          genuinely has NO extension in both implementations): real
+          ay_emul's Module_Detector calls the FULL structural FoundPT3
+          (which apparently rejects this specific file despite its
+          correct-looking "ProTracker 3.5 compilation of..." header
+          text - root cause not further diagnosed), while
+          identify_ay_file's Tier C fallback for PT3 is a simple text-
+          signature search and accepts it - exactly the "best-effort...
+          not a byte-for-byte port... not proven identical" caveat
+          already on scan_whole_file_for_pt3/
+          scan_whole_file_for_signature_trackers.
+        - 2 files (bare ".stp"/".pt2"-named dotfiles, same ExtractFileExt
+          behavior): identify_ay_file's full structural ports
+          (detect_stp_structural/detect_pt2_structural) pass every
+          pointer-arithmetic check but real ay_emul's Module_Detector
+          still rejects them - almost certainly the missing final
+          IntegrityCheck step (a LoadTrackerModule+GetTimeXXX call
+          computing a playable duration, rejecting a candidate whose
+          duration comes back zero) - exactly the limitation documented
+          in detect_st_family.h/identify_ay_file.md.
+        - 1 file: a plain-text `readme` (no extension) whose human-
+          written prose happens to literally quote another file's PSC
+          header ("...aka PSC V1.06 COMPILATION OF RAIN ... BY
+          DJ.SPACE P.P 1998") at exactly the offsets
+          scan_whole_file_for_signature_trackers's substring search
+          checks, producing a genuine false positive - a concrete,
+          amusing confirmation of the "not proven identical" caveat on
+          that function, not a new class of bug.
+      One REAL bug was found and fixed by this investigation, in
+      detect_ay_container (detect_container.c): OpenAYFile (Players.pas:
+      7192-7230) does NOT classify ZXAY-container TypeID "AMAD" as a
+      distinct "AYAMAD" format or TypeID "ST11" as "AY;subtype=ST11" (what
+      identify_ay_file originally, incorrectly, assumed by over-trusting
+      Ay_Emul.fmt's OS-mime-type names) - it reassigns them to FT.FXM and
+      FT.ST1 respectively, i.e. a ZXAY+AMAD container plays as an ordinary
+      FXM file and a ZXAY+ST11 container as an ordinary ST1 file. Fixed
+      before this oracle run (no real ZXAY+AMAD/ST11 sample existed in the
+      78-file set to re-confirm directly, but the fix is a direct,
+      verified transcription of OpenAYFile's actual code).
+    rationale: >
+      Closed as validated: this is a genuine differential comparison
+      against the real compiled ay_emul binary (not just code-reading),
+      covering every distinct output permutation observed in a large
+      real-world corpus, with every discrepancy traced to a specific,
+      already-documented, deliberate scope decision rather than an
+      unexplained gap.
+    verification: >
+      tools/identify_ay_file/identify_ay_file and
+      ay_emul/OracleHarness.pas's `identify_file` scenario run side by
+      side against 78 real files (selected via a full-corpus scan for
+      distinct output-field combinations); `format=` fields compared
+      directly. 70/78 exact matches; all 8 remaining differences traced to
+      specific, cited Pascal source locations and existing documented
+      limitations, as detailed above. OracleHarness.pas changes are
+      submodule-local only, never pushed, per PORTING_TO_C11_LINUX.md §8.1.

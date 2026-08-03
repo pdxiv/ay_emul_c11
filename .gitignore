@@ -15,6 +15,7 @@ tests/engine_smoke/test_ay
 tests/engine_smoke/test_m68k_bus
 tests/engine_smoke/test_atari
 tests/oracle_diff/dump_engine_state
+tools/identify_ay_file/identify_ay_file
 
 # Musashi code-generates these from m68k_in.c at build time (see
 # engine/Makefile) - not checked into the vendored submodule.

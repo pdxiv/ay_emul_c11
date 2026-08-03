@@ -745,6 +745,45 @@ leave as an assumption:
   oracle's value for every future comparison, and defeats the entire
   purpose of differential testing.
 
+### 8.2 Keep C11 source files under 600 lines — split by semantic boundary, not arbitrarily
+
+No file in the C11 port (`engine/`, `tools/`, or anywhere else new C code is
+added) should exceed 600 lines. This applies regardless of how directly a
+single Pascal unit maps onto a single conceptual C module — a large
+original `.pas` file (many run several thousand lines) is not a license for
+an equally large `.c` file on the C11 side.
+
+When a file would otherwise cross that threshold, split it along
+**semantic boundaries** — one file per format, subsystem, detector family,
+or clearly-separable concern — rather than by an arbitrary line count or by
+extracting unrelated helper functions just to shrink a number. Shared
+types, small bounds-checked helpers, or output-formatting code that
+multiple format-specific files depend on belong in their own dedicated
+file (with a matching header under `include/`), not duplicated or left
+in whichever file happened to need them first.
+
+This project's own `tools/identify_ay_file/` is a concrete example of the
+pattern to follow: rather than one monolithic `identify_ay_file.c`, it's
+organized as `include/identify/*.h` (shared types: `filebuf`, `detection`,
+`outline`, plus small bounds-checked byte-access helpers) and
+`src/*.c`, one file per format family (`detect_container.c` for AY/AYM/PSG,
+`detect_ym.c`, `detect_vtx.c`, `detect_pt3.c`, `detect_st_family.c`,
+`detect_pt_asc_family.c`, `detect_stf.c`, `detect_fls.c`,
+`detect_signature_trackers.c`, `detect_sndh.c`), with `dispatch.c` tying
+the per-format detectors together and `main.c` handling only argument
+parsing and output. No file in that tool exceeds ~320 lines even though
+the combined detection logic is substantial. `engine/` follows the same
+general layout (`engine/include/ay_engine/*.h` + `engine/src/*.c`, one
+file per subsystem/format: `z80_bus.c`, `ay.c`, `atari_emulate.c`,
+`ay_file.c`, `ym_file.c`, `pt3_file.c`, `sndh_file.c`, `vtx_file.c`,
+`lh5.c`, etc.), but predates this rule being written down explicitly:
+`engine/src/ay.c` is currently 858 lines, over the limit, and should be
+split by semantic boundary (e.g. register/mixer logic vs. filter/level-
+table setup vs. envelope handling) the next time it's substantially
+touched, rather than treated as a precedent for new files to match. Keep
+new engine/ files under the limit from the start rather than letting this
+become the pattern.
+
 ## 9. On tracking this as migration debt
 
 Per the porting conventions this workspace uses for LLM-assisted ports: if

@@ -30,3 +30,5 @@ The recommended build order (§8 of that document):
 ## Porting conventions
 
 Per this workspace's global LLM-porting invariants, incomplete or approximated behavior must be tracked as explicit migration debt (`MIG-####` entries in a machine-checkable ledger such as `migration_debt.yaml`), not silently omitted. No such ledger exists yet — it should be created once porting work starts (see §9 of PORTING_TO_C11_LINUX.md).
+
+**No C11 source file should exceed 600 lines.** If a file grows past that, split it into several smaller files along appropriate semantic boundaries (e.g. one file per format/subsystem/detector family, with shared types/helpers factored into their own file) rather than letting a single file accumulate unrelated concerns. See PORTING_TO_C11_LINUX.md §8.2 for the full rationale.

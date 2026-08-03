@@ -1,4 +1,4 @@
-/* Loads a real .ym file (songs/cpc/The Last V8.ym, LHA-compressed YM5!
+/* Loads a real .ym file (test_corpus_76/Batman_Journey.ym, LHA-compressed YM5!
  * extended format) end-to-end through engine/src/lh5.c + ym_file.c and
  * confirms it plays without error and produces audible output. See
  * README.md. */
@@ -26,10 +26,10 @@ static uint8_t* read_whole_file(const char* path, size_t* out_size) {
   return buf;
 }
 
-static void test_tlv8_plays(void) {
+static void test_ym_plays(void) {
   size_t size;
-  uint8_t* data = read_whole_file("../../songs/cpc/The Last V8.ym", &size);
-  assert(data != NULL && "songs/cpc/The Last V8.ym not found");
+  uint8_t* data = read_whole_file("../../test_corpus_76/Batman_Journey.ym", &size);
+  assert(data != NULL && "test_corpus_76/Batman_Journey.ym not found");
 
   ym_file f;
   ym_file_status st = ym_file_load(&f, data, size, YM_FILE_SAMPLE_RATE_DEF);
@@ -51,7 +51,7 @@ static void test_tlv8_plays(void) {
 
   assert(frames_total > 0);
   assert(any_nonzero && "expected audible output from a real .ym file");
-  printf("test_tlv8_plays: OK (%d sample frames, real_end_all=%d)\n",
+  printf("test_ym_plays: OK (%d sample frames, real_end_all=%d)\n",
          frames_total, f.real_end_all);
 
   ym_file_free(&f);
@@ -68,7 +68,7 @@ static void test_bad_header_rejected(void) {
 }
 
 int main(void) {
-  test_tlv8_plays();
+  test_ym_plays();
   test_bad_header_rejected();
   printf("All ym_file smoke tests passed.\n");
   return 0;
