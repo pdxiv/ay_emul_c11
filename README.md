@@ -4,7 +4,7 @@ A from-scratch C11 port of [Ay_Emul](https://sourceforge.net/projects/ay-emul/),
 
 ## Status
 
-Phases 0–4 of the plan below are done and oracle-validated (see `migration_debt.yaml` for the full MIG-#### ledger, including what's still open). Phase 5 (GUI) has not started. Concretely:
+Phases 0–4 of the plan below are done and oracle-validated (see `migration_debt.yaml` for still-open MIG-#### entries and `migration_debt_validated.yaml` for closed-out ones — split across two files to keep each one workable in size; see "Porting conventions" below). Phase 5 (GUI) has not started. Concretely:
 
 - **Engine** (`engine/`): Z80 (superzazu/z80) and 68000 (Musashi) CPU cores, the AY-3-8910/12 sound chip, Atari ST hardware (MFP/DMA-sound/scheduling), and format loaders for AY/YM/PT3/VTX (byte-identical against the real binary) and SNDH (loads and runs, but see MIG-0021 for its one known-incomplete gap: no audible output yet).
 - **`tools/identify_ay_file/`**: a standalone AY/YM format identification utility (not part of playback), covering ~19 formats, oracle-diff-verified against the real binary for the ~9 it can fully verify this way.
@@ -35,6 +35,6 @@ The recommended build order (§8 of that document):
 
 ## Porting conventions
 
-Per this workspace's global LLM-porting invariants, incomplete or approximated behavior must be tracked as explicit migration debt (`MIG-####` entries in the machine-checkable ledger `migration_debt.yaml`), not silently omitted — see §9 of PORTING_TO_C11_LINUX.md for the states used (`translated`/`behaviorally_incomplete`/`validated`).
+Per this workspace's global LLM-porting invariants, incomplete or approximated behavior must be tracked as explicit migration debt (`MIG-####` entries in the machine-checkable ledger), not silently omitted — see §9 of PORTING_TO_C11_LINUX.md for the states used (`translated`/`behaviorally_incomplete`/`validated`). The ledger is split across two files to keep each one a manageable size: **`migration_debt.yaml`** holds every entry still in the `translated`/`behaviorally_incomplete` state (i.e. anything not yet closed out), and **`migration_debt_validated.yaml`** holds entries once they reach `state: validated`. When closing out an entry, move it from the former to the latter rather than just flipping its `state` in place. When auditing open debt or deciding what's safe to build on, check `migration_debt.yaml`; when looking for how a past area was validated, check `migration_debt_validated.yaml`.
 
 **No C11 source file should exceed 600 lines.** If a file grows past that, split it into several smaller files along appropriate semantic boundaries (e.g. one file per format/subsystem/detector family, with shared types/helpers factored into their own file) rather than letting a single file accumulate unrelated concerns. See PORTING_TO_C11_LINUX.md §8.2 for the full rationale.

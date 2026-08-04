@@ -2,7 +2,7 @@
 # ay_player smoke test: builds the tool, then runs its WAV-export path
 # (headless, no ALSA device required) against one real file per format
 # from ../../test_corpus_76, confirming correct format detection and a
-# well-formed, audible (except SNDH - see MIG-0021) WAV file for each.
+# well-formed, audible WAV file for each.
 # Also checks the error paths (unrecognized content, missing file).
 # See migration_debt.yaml MIG-0027.
 set -e
@@ -52,7 +52,7 @@ check_format "MetalMania.ay" "AY" "yes"
 check_format "Batman_Journey.ym" "YM" "yes"
 check_format "ZAGON_07_remixDJ_EchoMAKROSS.pt3" "PT3" "yes"
 check_format "DIABOLIS_IN_MUSICA.pt3" "PT3" "yes" # detected via extension fallback - corrupted title byte defeats the content signature, matching real Pascal's FoundPT3 (never checks that text)
-check_format "More_Short_Demos.sndh" "SNDH" "no" # MIG-0021: known incomplete
+check_format "More_Short_Demos.sndh" "SNDH" "yes" # MIG-0045 fixed the byte-swap bug that caused this; not yet byte-identical to the real Pascal engine (MIG-0021/MIG-0045)
 check_format "GB2_5.vtx" "VTX" "yes"
 check_format "DEMON.pt1" "PT1" "yes" # detected via extension fallback - no Ay_Emul.fmt signature
 check_format "L.Boy_broken.gtr" "GTR" "yes" # detected via extension fallback - no Ay_Emul.fmt signature

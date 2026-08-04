@@ -677,8 +677,9 @@ Given §2's finding that the engine is largely GUI-decoupled, and §5's
 finding that the GUI is the highest-risk, lowest-mechanical-translatability
 part of the codebase, the port is much lower-risk done in this order:
 
-**Status: phases 0–4 done (see `migration_debt.yaml` for the full
-MIG-#### ledger); phase 5 (GUI) not started.**
+**Status: phases 0–4 done (see `migration_debt.yaml` for still-open
+MIG-#### entries and `migration_debt_validated.yaml` for closed-out
+ones — §9 explains the split); phase 5 (GUI) not started.**
 
 0. **Run the Z80 fidelity gate** (§7.1) before writing any engine code:
    confirm superzazu/z80 — already decided on — passes ZEXALL/ZEXDOC and
@@ -806,16 +807,27 @@ become the pattern.
 
 Per the porting conventions this workspace uses for LLM-assisted ports: if
 this port is actually undertaken, it should be tracked module-by-module in
-a machine-checkable ledger (`migration_debt.yaml` / `porting_ledger.json`)
-using the `translated` / `behaviorally_incomplete` / `validated` states,
-with a `MIG-####` id for every stub, approximated behavior, or deferred
-subsystem (the GUI, if deferred per §8, would itself be one or more
-open `MIG-####` entries against a headless-only build) — not silently
-implied by "the CLI player works." `timedb.inc.h`'s open GPLv3 licensing
-question (§4.6) is exactly the kind of thing that ledger exists for: the
-file is being kept in the port now, with the license question explicitly
-unresolved rather than either blocking on it or quietly shipping it as if
-it were clean — that's a `MIG-####` entry, not a footnote to forget about.
-This document is the *feasibility survey* that such a ledger would be
-scoped from; it does not itself constitute porting progress, and no code
-has been changed as part of producing it.
+a machine-checkable ledger using the `translated` / `behaviorally_incomplete`
+/ `validated` states, with a `MIG-####` id for every stub, approximated
+behavior, or deferred subsystem (the GUI, if deferred per §8, would itself
+be one or more open `MIG-####` entries against a headless-only build) — not
+silently implied by "the CLI player works." `timedb.inc.h`'s open GPLv3
+licensing question (§4.6) is exactly the kind of thing that ledger exists
+for: the file is being kept in the port now, with the license question
+explicitly unresolved rather than either blocking on it or quietly shipping
+it as if it were clean — that's a `MIG-####` entry, not a footnote to
+forget about. This document is the *feasibility survey* that such a ledger
+would be scoped from; it does not itself constitute porting progress, and
+no code has been changed as part of producing it.
+
+The ledger itself is split across two files, to keep each one a workable
+size as the number of entries grows: **`migration_debt.yaml`** holds every
+entry currently in the `translated` or `behaviorally_incomplete` state —
+i.e. everything still open — and **`migration_debt_validated.yaml`** holds
+entries once they've reached `state: validated`. Closing an entry means
+*moving* it from the former file to the latter (not just editing its
+`state` field in place), so `migration_debt.yaml` always reflects exactly
+the current open debt, and a fresh session can survey it without wading
+through everything already closed out. `porting_ledger.json` (mentioned
+above as an alternative ledger format this workspace's conventions allow)
+was not used for this port; both ledger files here are YAML.

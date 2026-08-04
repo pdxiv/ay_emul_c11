@@ -141,3 +141,7 @@ void m68k_bus_set_irq(m68k_bus* bus, int level) {
   g_active_bus = bus;
   m68k_set_irq((unsigned int)level);
 }
+
+int m68k_bus_cycles_run(void) { return m68k_cycles_run(); }
+
+void m68k_bus_end_timeslice(void) { m68k_end_timeslice(); }

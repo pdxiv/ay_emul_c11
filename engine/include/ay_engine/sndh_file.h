@@ -11,6 +11,21 @@
  * Jar, and a "start point" trampoline that calls the SNDH's own INIT
  * routine once and then installs its PLAY routine into the VBL queue.
  *
+ * MIG-0045: the hand-assembled 16-bit instruction words in that memory
+ * layout were, until this entry, systematically byte-swapped - Pascal's
+ * WPtr(@bank0[addr])^:=$XXXX is a raw native (little-endian) pointer
+ * write, so the ORIGINAL source constants are themselves deliberately
+ * pre-swapped (WPtr(...)^:=$734E, labelled {RTE}, really is RTE -
+ * Musashi confirms the true opcode is 0x4e73 - only because the native
+ * write reverses it back). This port's put16() is an explicit, correct
+ * big-endian writer, the opposite convention, so every such constant
+ * needed un-swapping before use and none were - corrupting the entire
+ * bootstrap. Before the fix: garbage/CPU runaway into unmapped memory
+ * after enough cycles, not just silence. After the fix: real, plausible
+ * audio, but NOT yet byte-identical to the real Pascal engine (a second,
+ * smaller, not-yet-root-caused divergence in exactly when audio starts -
+ * see migration_debt.yaml MIG-0045 for what's confirmed vs still open).
+ *
  * Ports:
  *  - sndh_UnpackFile's "not ICE-compressed" path only (sndh.pas:497-509):
  *    confirmed via the real test file (songs/sndh/Temple_of_Asherah.sndh)

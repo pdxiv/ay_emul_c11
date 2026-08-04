@@ -190,9 +190,15 @@ sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
   put32(f->mem, 0x114, 0x1076u);   /* MFP Timer C */
   put32(f->mem, 0x120, 0x1076u);   /* MFP Timer B */
   put32(f->mem, 0x134, 0x1076u);   /* MFP Timer A */
-  put16(f->mem, 0x448, 0x0100u);
-  put16(f->mem, 0x452, 0x0100u);
-  put16(f->mem, 0x454, 0x0800u);
+  /* atari.pas:1130-1132 writes these via a raw native-pointer WPtr
+   * assignment (no conversion helper) - Pascal source constants are
+   * therefore pre-byte-swapped relative to their true big-endian value
+   * (WPtr(...)^:=$0100 -> native LE write -> true bytes read back as
+   * $0001). put16 here is an explicit big-endian writer, so the TRUE
+   * value must be passed directly, not the Pascal literal - MIG-0045. */
+  put16(f->mem, 0x448, 0x0001u);
+  put16(f->mem, 0x452, 0x0001u);
+  put16(f->mem, 0x454, 0x0008u);
   put32(f->mem, 0x456, 0x04CEu);
   put32(f->mem, 0x0FF6, 8u + PRG_START + 0x1000u); /* PLAY entry address */
 
@@ -203,43 +209,48 @@ sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
   if (vbl_freq != 50.0) put16(f->mem, 0x448, 0);
   put16(f->mem, 0x452, 0);
 
-  /* atari.pas:1180-1217 - hand-assembled VBL interrupt handler. */
+  /* atari.pas:1180-1217 - hand-assembled VBL interrupt handler. Every
+   * put16 constant below is the byte-swap of the Pascal source's raw
+   * WPtr(...)^:=$XXXX literal (see the 0x448/0x452/0x454 comment above
+   * for why) - MIG-0045 fixed all of them; they were previously passed
+   * through unswapped, corrupting every one of these hand-assembled
+   * 16-bit instruction words. */
   put32(f->mem, 0x1000, 0x48E7FFFEu);
   put32(f->mem, 0x1004, 0x207C0000u);
-  put16(f->mem, 0x1008, 0x5204u);
+  put16(f->mem, 0x1008, 0x0452u);
   put32(f->mem, 0x100A, 0x0C500000u);
   put32(f->mem, 0x100E, 0x66000062u);
   put32(f->mem, 0x1012, 0x207C0000u);
-  put16(f->mem, 0x1016, 0x5404u);
+  put16(f->mem, 0x1016, 0x0454u);
   put32(f->mem, 0x1018, 0x4C900001u);
   put32(f->mem, 0x101C, 0x207C0000u);
-  put16(f->mem, 0x1020, 0xFE0Fu);
+  put16(f->mem, 0x1020, 0x0FFEu);
   put32(f->mem, 0x1022, 0x48900001u);
   put32(f->mem, 0x1026, 0x207C0000u);
-  put16(f->mem, 0x102A, 0x5604u);
+  put16(f->mem, 0x102A, 0x0456u);
   put32(f->mem, 0x102C, 0x4CD00001u);
   put32(f->mem, 0x1030, 0x207C0000u);
-  put16(f->mem, 0x1034, 0xFA0Fu);
+  put16(f->mem, 0x1034, 0x0FFAu);
   put32(f->mem, 0x1036, 0x48D00001u);
   put32(f->mem, 0x103A, 0x207C0000u);
-  put16(f->mem, 0x103E, 0xFE0Fu);
+  put16(f->mem, 0x103E, 0x0FFEu);
   put32(f->mem, 0x1040, 0x0C500000u);
   put32(f->mem, 0x1044, 0x6700002Cu);
   put32(f->mem, 0x1048, 0x04500001u);
   put32(f->mem, 0x104C, 0x207C0000u);
-  put16(f->mem, 0x1050, 0xFA0Fu);
+  put16(f->mem, 0x1050, 0x0FFAu);
   put32(f->mem, 0x1052, 0x4CD00001u);
   put32(f->mem, 0x1056, 0x06900000u);
-  put16(f->mem, 0x105A, 0x0400u);
-  put16(f->mem, 0x105C, 0x4020u);
+  put16(f->mem, 0x105A, 0x0004u);
+  put16(f->mem, 0x105C, 0x2040u);
   put32(f->mem, 0x105E, 0x0C900000u);
   put16(f->mem, 0x1062, 0x0000u);
   put32(f->mem, 0x1064, 0x6700FFD4u);
   put32(f->mem, 0x1068, 0x4CD00100u);
-  put16(f->mem, 0x106C, 0x904Eu);
+  put16(f->mem, 0x106C, 0x4E90u);
   put32(f->mem, 0x106E, 0x6000FFCAu);
   put32(f->mem, 0x1072, 0x4CDF7FFFu);
-  put16(f->mem, 0x1076, 0x734Eu);
+  put16(f->mem, 0x1076, 0x4E73u); /* RTE */
 
   /* atari.pas:1234-1240 - TRAP #1 (Super) emulation. */
   put32(f->mem, 0x1200, 0x21CF11FCu);
@@ -248,7 +259,7 @@ sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
   put32(f->mem, 0x120C, 0x203811FCu);
   put32(f->mem, 0x1210, 0x21FC0000u);
   put32(f->mem, 0x1214, 0x000011FCu);
-  put16(f->mem, 0x1218, 0x734Eu);
+  put16(f->mem, 0x1218, 0x4E73u); /* RTE */
 
   /* atari.pas:1243-1257 - Cookie Jar (_CPU=0/68000, _SND=1/YM only,
    * _MCH=0/Atari ST - STe not ported, no real test file needs it). */
@@ -261,13 +272,15 @@ sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
 
   /* atari.pas:1277-1292 - "start point" trampoline: BSR to the SNDH's own
    * INIT (offset 0 of the loaded buffer), then install the precomputed
-   * PLAY address into the VBL queue, then idle. */
+   * PLAY address into the VBL queue, then idle. put16 constants here are
+   * likewise the byte-swap of the Pascal source's raw WPtr literal - see
+   * the 0x448 comment above (MIG-0045). */
   put32(f->mem, PRG_START + 0x00, 0x61000FFEu);
   put32(f->mem, PRG_START + 0x04, 0x207C0000u);
-  put16(f->mem, PRG_START + 0x08, 0xF60Fu);
+  put16(f->mem, PRG_START + 0x08, 0x0FF6u);
   put32(f->mem, PRG_START + 0x0A, 0x4CD00001u);
   put32(f->mem, PRG_START + 0x0E, 0x207C0000u);
-  put16(f->mem, PRG_START + 0x12, 0xCE04u);
+  put16(f->mem, PRG_START + 0x12, 0x04CEu);
   put32(f->mem, PRG_START + 0x14, 0x48D00001u);
   put32(f->mem, PRG_START + 0x18, 0x4E722000u); /* STOP #$2000 */
   put32(f->mem, PRG_START + 0x1C, 0x6000FFFAu); /* BRA.W Loop */
@@ -294,6 +307,22 @@ sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
    * first time the mixer runs. */
   f->ay.delay_in_tiks = (uint32_t)(8192.0 / sample_rate * ay_freq + 0.5);
   f->ay.tik_re = f->ay.delay_in_tiks;
+  /* atari.pas's Atari_SetDefault: FrqAyByFrqMC68000 :=
+   * round(AyFreq/MC68000Freq/8*4294967296) - the cycle-to-tick ratio
+   * SynthesizerSNDH (atari.pas:1717-1748) uses to convert elapsed 68000
+   * cycles into AY-chip ticks before ever calling Synthesizer_Stereo16.
+   * MIG-0046: previously never set (stayed 0), and sndh_file_make_buffer
+   * called ay_synthesizer_stereo16 directly instead of through
+   * ay_synthesizer_ay (which performs this exact accumulation) - meaning
+   * sample-generation rate was driven by how many times
+   * atari_emulate_step happened to be called rather than by elapsed
+   * hardware cycles, silently "compensated" by an unrelated bug (Musashi's
+   * STOP early-return) that inflated the call count until THAT bug was
+   * fixed, at which point playback ran audibly too fast (confirmed:
+   * tick_count/rendered-second went from the correct ~200Hz to ~1600-1900Hz
+   * without this fix). */
+  f->ay.frq_ay_by_frq_z80 =
+      (int64_t)(ay_freq / mc68000_freq / 8.0 * 4294967296.0 + 0.5);
   ay_engine_calculate_level_tables(&f->ay);
   atari_emulate_init(&f->atari, f->mem, mem_size, &f->ay, mc68000_freq,
                       vbl_period, ay_freq);
@@ -329,16 +358,30 @@ int sndh_file_make_buffer(sndh_file* f, int16_t* buf, int buffer_length) {
   }
   if (ay->int_flag) return ay->buf_len;
 
+  /* atari.pas: Atari_CheckOuts's AY-register half (MIG-0050) - applies any
+   * writes that engine/atari_emulate.c's ym_region_write deferred onto
+   * f->atari.pending_writes during the PREVIOUS render call (because the
+   * output buffer was already full at that point), before CPU execution
+   * resumes this call - matching the original's exact call ordering
+   * (right after the top-of-function IntFlag check, before the main
+   * Atari_Emulate loop). */
+  atari_emulate_flush_pending_writes(&f->atari);
+
   while (ay->buf_len < buffer_length && !f->real_end_all) {
     atari_emulate_step(&f->atari);
     if (f->atari.real_end_all) f->real_end_all = true;
     if (ay->buf_len < buffer_length &&
         (f->atari.cycle_count >= 150000 || f->real_end_all)) {
       /* Players.pas:14071-14072's `s68000readOdometer >= 150000` check -
-       * this is the ONLY place AY/YM register writes get flushed into
-       * audio (engine/atari_emulate.c's ym_region_write deliberately
-       * applies writes without flushing, matching the Z80/AY milestone's
-       * on_ay_write contract - flush timing is this render loop's job).
+       * MIG-0050: ym_region_write now ALSO flushes reentrantly on every
+       * AY register write (matching atari.pas's soundchip_writebyte), so
+       * this is no longer the ONLY flush point - it's the same "flush at
+       * least once per Atari_Emulate call regardless of writes" backstop
+       * the original itself has (MakeBufferSNDH calls SynthesizerSNDH
+       * here unconditionally past this cycle threshold, on top of
+       * soundchip_writebyte's own reentrant calls - calling the
+       * accumulator more often than strictly necessary is harmless, it
+       * just processes a near-zero tick delta most of the time).
        * The original never resets its odometer at this checkpoint either
        * (it only wraps via Starscream's own 32-bit overflow, practically
        * never within one session) - so in BOTH implementations this
@@ -346,8 +389,18 @@ int sndh_file_make_buffer(sndh_file* f, int16_t* buf, int buffer_length) {
        * at 8MHz) and stays true, meaning this flush actually fires on
        * essentially every atari_emulate_step call thereafter. Not a bug -
        * confirmed to match the original's own real behavior, not merely
-       * this port's simplification. */
-      ay_synthesizer_stereo16(ay);
+       * this port's simplification.
+       *
+       * MIG-0046: this call must go through ay_synthesizer_ay (atari.pas's
+       * SynthesizerSNDH wrapper), NOT ay_synthesizer_stereo16 directly
+       * (that's only correct for the int_flag branch above, matching
+       * MakeBufferSNDH's own top-of-function Synthesizer(Buf) call, which
+       * really is the raw, unwrapped Synthesizer). ay_synthesizer_ay
+       * performs the actual elapsed-cycles-to-AY-ticks accumulation
+       * (Number_Of_Tiks.Re += Odometer*FrqAyByFrqMC68000) BEFORE calling
+       * ay_synthesizer_stereo16 internally - without it, sample count is
+       * driven by call count instead of elapsed hardware cycles. */
+      ay_synthesizer_ay(ay, f->atari.cycle_count);
     }
   }
   return ay->buf_len;

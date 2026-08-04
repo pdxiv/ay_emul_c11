@@ -4,6 +4,8 @@
 
 #include <string.h>
 
+#include "ay_engine/trace_log.h"
+
 /* atari.pas:93 */
 static const int MFP_KOEFS[8] = {0, 4, 10, 16, 50, 64, 100, 200};
 /* atari.pas:44,1580-1586: MCbyMFP = MC68000Freq/MFPFreq =
@@ -51,6 +53,22 @@ void mfp_init(mfp* m) {
   m->timers[3].v = 4; m->timers[3].ipx_index = REG_IPB;
   m->timers[3].isx_index = REG_ISB; m->timers[3].txd_index = REG_TDD;
   m->timers[3].ipsb = 16;
+
+  /* atari.pas:1346-1354 - MIG-0054 (docs/mfp_reference.md cross-check):
+   * Atari_InitEmu explicitly sets DR/Cnt to 256 for all four timers after
+   * zeroing everything else, NOT left at 0 - a raw data-register byte of
+   * 0 always expands to 256 (see expand_timer_dr), so this seeds every
+   * timer as if its data register already held that expanded value, the
+   * same way real hardware's "00 reloads as 256" rule applies from power-
+   * on. Previously left at 0 here (from the memset above), meaning any
+   * timer started before its data register was ever explicitly written
+   * would compute a delay of exactly 0 (get_mfp_delay(dm, 0) = 0) instead
+   * of the same nonzero delay atari.pas would compute from dr=256. */
+  int i;
+  for (i = 0; i < 4; i++) {
+    m->timers[i].dr = 256;
+    m->timers[i].cnt = 256;
+  }
 }
 
 /* atari.pas:366-372. `od` is the current cycle count (caller-supplied,
@@ -171,27 +189,99 @@ uint8_t mfp_read_byte_at(mfp* m, uint32_t address, int64_t od) {
   }
 }
 
-void mfp_write_byte_at(mfp* m, uint32_t address, uint8_t value, int64_t od) {
-  if ((address & 1) == 0) return;
+bool mfp_write_byte_at(mfp* m, uint32_t address, uint8_t value, int64_t od) {
+  if ((address & 1) == 0) return false;
   int i = (int)((address - 0xFFFA01) / 2);
-  if (i >= 0 && i < 24) set_mfp_register(m, i, value, od);
+  if (i < 0 || i >= 24) return false;
+  set_mfp_register(m, i, value, od);
+  /* atari.pas:434-516's SetMFPRegister - s68000releaseTimeslice is called
+   * for exactly these cases, see mfp.h's doc comment (MIG-0054). */
+  switch (i) {
+    case REG_IEA: case REG_IEB: case REG_IMA: case REG_IMB:
+    case REG_TAC: case REG_TBC: case REG_TDC:
+    case REG_TAD: case REG_TBD: case REG_TCD: case REG_TDD:
+      return true;
+    default:
+      return false;
+  }
 }
 
-/* atari.pas:1383-1431, minus the ICnt retry mechanism - see mfp.h. */
+uint8_t mfp_bus_read(void* userdata, uint32_t address) {
+  const mfp_bus_context* ctx = (const mfp_bus_context*)userdata;
+  return mfp_read_byte_at(ctx->m, address, *ctx->od);
+}
+
+void mfp_bus_write(void* userdata, uint32_t address, uint8_t value) {
+  const mfp_bus_context* ctx = (const mfp_bus_context*)userdata;
+  bool released = mfp_write_byte_at(ctx->m, address, value, *ctx->od);
+  if ((address & 1) != 0) {
+    int reg = (int)((address - 0xFFFA01) / 2);
+    trace_log_mfp(*ctx->od, reg, value, released);
+  }
+  if (released) {
+    m68k_bus_end_timeslice();
+  }
+}
+
+/* atari.pas:1383-1431 (EmulateTimer) in full, including the ICnt retry
+ * mechanism - MIG-0051 (see mfp.h's file comment for why the earlier
+ * "unnecessary under the level-triggered model" reasoning was wrong). */
+static void request_level6(mfp* m, mfp_timer* t, int64_t od) {
+  /* atari.pas:1400-1401,1418-1419: MFP_DT.IPx^:=IPx^ or IPSb (unconditional
+   * per-source pending flag) plus, if masked-and-EOI-mode, the ISR flag -
+   * this part is unconditional and happens regardless of whether the
+   * shared level-6 slot below is free. */
+  m->reg[t->ipx_index] |= t->ipsb;
+  if (t->im && (m->reg[REG_VCR] & 8) != 0) {
+    m->reg[t->isx_index] |= t->ipsb;
+  }
+  if (!t->im) return; /* atari.pas only attempts s68000interrupt if IM set */
+
+  int vector = (m->reg[REG_VCR] & 0xF0) | t->v;
+  if (!m->level6_pending) {
+    /* atari.pas: s68000interrupt(...)=0 - request succeeds, latching this
+     * timer's vector into the shared slot (matching Starscream's own
+     * __interrupts[6] storage at request time - see mfp.h). */
+    m->level6_pending = true;
+    m->pending_vector = vector;
+    trace_log_irq(od, "assert", 6, vector);
+    if ((m->reg[REG_VCR] & 8) == 0) { /* automatic end-of-interrupt mode */
+      m->reg[t->ipx_index] &= (uint8_t)~t->ipsb;
+      m->reg[t->isx_index] &= (uint8_t)~t->ipsb;
+    }
+  } else {
+    /* atari.pas: s68000interrupt(...)<>0 - already pending, queue a retry. */
+    trace_log_irq(od, "coalesce", 6, vector);
+    t->icnt++;
+  }
+}
+
 int64_t mfp_emulate_timer(mfp* m, int idx, int64_t od) {
   mfp_timer* t = &m->timers[idx];
+
+  /* atari.pas:1383-1387 - retry a previously-queued request, one per
+   * call, exactly as many times as it takes for the shared slot to free
+   * up. */
+  if (t->icnt > 0) {
+    if (!t->ie || !t->im) {
+      t->icnt = 0;
+    } else if (!m->level6_pending) {
+      m->level6_pending = true;
+      m->pending_vector = (m->reg[REG_VCR] & 0xF0) | t->v;
+      trace_log_irq(od, "assert", 6, m->pending_vector);
+      t->icnt--;
+      if (t->icnt == 0 && (m->reg[REG_VCR] & 8) == 0) {
+        m->reg[t->ipx_index] &= (uint8_t)~t->ipsb;
+        m->reg[t->isx_index] &= (uint8_t)~t->ipsb;
+      }
+    }
+    /* else: still occupied - stays queued, retried again next call. */
+  }
+
   if (t->delay <= 0) return -1;
 
   if (od - t->base >= t->delay) {
-    if (t->ie) {
-      m->reg[t->ipx_index] |= t->ipsb;
-      if (t->im && (m->reg[REG_VCR] & 8) != 0) {
-        /* software end-of-interrupt mode: ISR set eagerly, cleared only by
-         * an explicit register write (matches SetMFPRegister's ISA/ISB
-         * case, which requires VCR bit 3 set to accept the clear). */
-        m->reg[t->isx_index] |= t->ipsb;
-      }
-    }
+    if (t->ie) request_level6(m, t, od);
     t->base += t->delay;
     t->dr = expand_timer_dr(m->reg[t->txd_index]);
     t->delay = get_mfp_delay(t->dm, t->dr);
@@ -200,27 +290,10 @@ int64_t mfp_emulate_timer(mfp* m, int idx, int64_t od) {
   return result <= 0 ? 1 : result;
 }
 
-bool mfp_irq_pending(const mfp* m) {
-  int i;
-  for (i = 0; i < 4; i++) {
-    const mfp_timer* t = &m->timers[i];
-    if (t->ie && t->im && (m->reg[t->ipx_index] & t->ipsb) != 0) return true;
-  }
-  return false;
-}
+bool mfp_irq_pending(const mfp* m) { return m->level6_pending; }
 
 int mfp_ack_interrupt(mfp* m) {
-  int i;
-  for (i = 0; i < 4; i++) {
-    mfp_timer* t = &m->timers[i];
-    if (t->ie && t->im && (m->reg[t->ipx_index] & t->ipsb) != 0) {
-      int vector = (m->reg[REG_VCR] & 0xF0) | t->v;
-      if ((m->reg[REG_VCR] & 8) == 0) { /* automatic end-of-interrupt mode */
-        m->reg[t->ipx_index] &= (uint8_t)~t->ipsb;
-        m->reg[t->isx_index] &= (uint8_t)~t->ipsb;
-      }
-      return vector;
-    }
-  }
-  return -1;
+  if (!m->level6_pending) return -1;
+  m->level6_pending = false;
+  return m->pending_vector;
 }

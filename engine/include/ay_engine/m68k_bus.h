@@ -99,4 +99,20 @@ void m68k_bus_set_reg(int reg, uint32_t value);
  * rationale). */
 void m68k_bus_set_irq(m68k_bus* bus, int level);
 
+/* Cycles consumed so far in the CURRENTLY RUNNING m68k_bus_exec call (i.e.
+ * mid-call, from within a read/write callback) - matches Musashi's own
+ * m68k_cycles_run(). Needed for MIG-0050: atari.pas's soundchip_writebyte
+ * calls SynthesizerSNDH REENTRANTLY, mid-instruction-stream, on every AY
+ * data-register write (Players.pas... no, atari.pas:558-580), which needs
+ * the LIVE odometer value at that exact instant, not just the value at the
+ * start of the enclosing exec() call. */
+int m68k_bus_cycles_run(void);
+
+/* Ends the current m68k_bus_exec call after finishing the in-flight
+ * instruction, matching Starcpu.inc's s68000releaseTimeslice - used when a
+ * reentrant mid-exec callback (see m68k_bus_cycles_run above) determines
+ * there's no more useful work to do this call (e.g. the caller's output
+ * buffer just filled up). */
+void m68k_bus_end_timeslice(void);
+
 #endif /* AY_ENGINE_M68K_BUS_H */

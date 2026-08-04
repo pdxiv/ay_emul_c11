@@ -411,6 +411,41 @@ for pt3_name in "ZAGON_07_remixDJ_EchoMAKROSS.pt3" "ZELiNAPI.pt3"; do
   fi
 done
 
+# wav_export (tracker formats, MIG-0043): 862 buffers/441344 frames (~10.01s
+# at the default 44100Hz SampleRateDef) - the "first 10 seconds" WAV snippet
+# comparison for every one of the remaining 12 tracker-family formats that
+# previously had no Pascal-side WAV-export scenario (only the lower-level
+# raw-PCM gates above), driven through the shared WriteTrackerWAV helper
+# (OracleHarness.pas) on the Pascal side and tools/ay_player's own --wav=
+# --frames=441344 CLI path on the C11 side.
+for fmt in pt1 gtr fls stc stp pt2 fxm psm asc asc0 ftc psc sqt; do
+  case "$fmt" in
+    pt1) fname="DEMON.pt1" ;;
+    gtr) fname="L.Boy_broken.gtr" ;;
+    fls) fname="SimpletonGift1.fls" ;;
+    stc) fname="AWAY.stc" ;;
+    stp) fname="Girls_of_Meladze.stp" ;;
+    pt2) fname="NOR.MUS..pt2" ;;
+    fxm) fname="The_Last_V8.fxm" ;;
+    psm) fname="m16.psm" ;;
+    asc) fname="NEWDANCE.asc" ;;
+    asc0) fname="MISTERS_BOX.as0" ;;
+    ftc) fname="RE-TRIGG.ftc" ;;
+    psc) fname="Inbetween_remix.psc" ;;
+    sqt) fname="MotorAnimation.sqt" ;;
+  esac
+  AY_EMUL_ORACLE="wav_export_$fmt" AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/$fname" \
+    AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_wav_$fmt.wav" "$ORACLE_BIN"
+  "$ROOT/tools/ay_player/ay_player" "$ROOT/test_corpus_76/$fname" \
+    --wav="$WORKDIR/player_wav_$fmt.wav" --frames=441344 >/dev/null
+  if cmp -s "$WORKDIR/oracle_wav_$fmt.wav" "$WORKDIR/player_wav_$fmt.wav"; then
+    echo "[PASS] wav_export ($fmt, $fname): oracle and ay_player WAV output byte-identical"
+  else
+    echo "[FAIL] wav_export ($fmt, $fname): WAV output differs"
+    status=1
+  fi
+done
+
 # wav_export (SNDH): deliberately NOT gated here. Driving the real Pascal
 # 68000 interpreter through MakeBufferSNDH for this file is extremely slow
 # (a single 512-frame call took 3+ minutes of wall-clock time in this

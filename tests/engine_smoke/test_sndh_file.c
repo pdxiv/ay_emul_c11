@@ -1,12 +1,13 @@
 /* Loads a real .sndh file (test_corpus_76/More_Short_Demos.sndh) end-to-end
- * through engine/src/sndh_file.c. KNOWN INCOMPLETE (MIG-0021): the
- * 68000/memory-layout port is verified byte-exact against the real
- * emulator (see migration_debt.yaml), but audio never starts within a
- * bounded run on EITHER implementation - a real Atari-hardware MFP-
- * timer-vs-VBL scheduling question, not yet resolved. This test
- * documents that honestly (prints the known-incomplete state) rather
- * than asserting audible output and failing the whole suite. See
- * README.md. */
+ * through engine/src/sndh_file.c. MIG-0045 fixed a systematic byte-swap
+ * bug in the hand-assembled bootstrap code that previously caused the
+ * CPU to run away into unmapped memory without ever writing a real AY
+ * register (MIG-0021's original "no register write observed" symptom -
+ * that was NOT a timing/scheduling question as first suspected, it was
+ * corrupted opcodes). Audio is now confirmed audible (asserted below) -
+ * STILL KNOWN INCOMPLETE per MIG-0045: not yet byte-identical to the
+ * real Pascal engine's own output (a smaller, separate, not-yet-
+ * root-caused divergence in exactly when audio starts). See README.md. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,16 +56,17 @@ static void test_plays(void) {
   }
 
   assert(frames_total > 0);
-  /* See MIG-0021: not yet audible on either implementation - a real
-   * Atari-hardware scheduling question, not silently swept under the
-   * rug. Load/CPU-execution correctness (verified separately, byte-exact
-   * against the real emulator) is what this test actually confirms. */
-  printf("test_plays: loads and runs without error (%d sample frames, "
-         "real_end_all=%d) - audio not yet confirmed, see MIG-0021\n",
+  /* MIG-0045: audio is now genuinely confirmed, not just "runs without
+   * crashing" - a real regression guard against the byte-swap bug
+   * recurring. Still not byte-identical to the real Pascal engine's own
+   * output (see migration_debt.yaml MIG-0045) - that gap isn't checked
+   * here since this test has no oracle-diff fixture, only ay_player's
+   * own manual WAV-export comparison does. */
+  assert(any_nonzero);
+  printf("test_plays: loads and runs with audible output (%d sample "
+         "frames, real_end_all=%d) - see MIG-0045 for the remaining "
+         "not-yet-byte-identical gap\n",
          frames_total, f.real_end_all);
-  if (!any_nonzero) {
-    printf("  (KNOWN INCOMPLETE: no audible output yet - MIG-0021)\n");
-  }
 
   sndh_file_free(&f);
 }

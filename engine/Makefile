@@ -11,7 +11,7 @@ MUSASHI_DIR = third_party/musashi
 MUSASHI_GEN = $(MUSASHI_DIR)/m68kops.c $(MUSASHI_DIR)/m68kops.h
 
 SRC = src/ay.c src/z80_bus.c src/m68k_bus.c src/mfp.c src/dma_sound.c \
-      src/atari_emulate.c src/ay_file.c src/lh5.c src/ym_file.c src/pt3_file.c \
+      src/atari_emulate.c src/trace_log.c src/ay_file.c src/lh5.c src/ym_file.c src/pt3_file.c \
       src/sndh_file.c src/vtx_file.c src/pt1_file.c src/gtr_file.c \
       src/fls_file.c src/stc_file.c src/stp_file.c src/pt2_file.c \
       src/fxm_file.c src/psm_file.c src/asc_file.c src/ftc_file.c \
