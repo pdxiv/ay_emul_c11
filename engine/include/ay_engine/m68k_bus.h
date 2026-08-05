@@ -115,4 +115,28 @@ int m68k_bus_cycles_run(void);
  * buffer just filled up). */
 void m68k_bus_end_timeslice(void);
 
+/* MIG-0056, EXPERIMENTAL / OPT-IN, explicit user directive (reversing this
+ * project's prior "never patch Musashi's cycle tables" rule - see
+ * PORTING_TO_C11_LINUX.md section 7.1.1 and migration_debt.yaml MIG-0056
+ * for the full policy history): when enabled, uses Musashi's own
+ * M68K_INSTRUCTION_HOOK (a supported integration point in m68kconf.h - this
+ * does NOT edit any of Musashi's actual CPU-emulation source files) to
+ * identify a small, explicitly-tracked set of opcode patterns already known
+ * (MIG-0053) to cost a different number of cycles on Musashi than on
+ * Starscream, and corrects this port's own a->cycle_count bookkeeping
+ * toward Starscream's value for exactly those patterns - WITHOUT changing
+ * how many real cycles Musashi itself actually runs for (Musashi's own
+ * internal dispatch/timing is untouched; only the PORT's separate cycle_count
+ * ledger, which drives MFP/VBL/DMA scheduling, is adjusted). Off by default;
+ * only takes effect once enabled. Only covers the 3 opcode patterns
+ * documented in m68k_bus.c's g_timing_patterns table - this is a known,
+ * deliberately narrow, tracked scope (MIG-0056), not a general fix. */
+void m68k_bus_enable_starscream_timing_override(bool enable);
+
+/* Drains and returns the accumulated correction (in cycles, positive or
+ * negative) computed since the last call - add this to a->cycle_count once
+ * per atari_emulate_step call, after m68k_bus_exec returns. Always returns
+ * 0 if m68k_bus_enable_starscream_timing_override was never called. */
+int64_t m68k_bus_take_timing_correction(void);
+
 #endif /* AY_ENGINE_M68K_BUS_H */

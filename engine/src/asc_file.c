@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "ay_engine/trace_log.h"
+
 /* Players.pas:959-970, ASM_Table. */
 static const uint16_t ASM_TABLE[86] = {
     0x0EDC, 0x0E07, 0x0D3E, 0x0C80, 0x0BCC, 0x0B22, 0x0A82, 0x09EC, 0x095C,
@@ -182,18 +184,28 @@ static void pattern_interpreter(asc_file* f, asc_channel* chan) {
           (int16_t)((int8_t)rb(f->data, chan->address_in_pattern) * 16);
       chan->ton_sliding_counter = 255;
     } else if (op == 0xF7 || op == 0xF9) {
-      int delta_ton;
+      /* Players.pas:9715 declares `delta_ton: smallint` (16-bit) - every
+       * assignment to it, including the pre-shift ASM_Table difference
+       * AND the `shl 4` below, wraps modulo 65536 with range checking
+       * off. A wide `int delta_ton` (as this used to be) never wraps,
+       * which normally doesn't matter (ASM_Table differences are small)
+       * but the `shl 4` (*16) can push a legitimately large difference
+       * (e.g. note=0, a very long/low-pitch period, sliding to a much
+       * shorter one) well past +-32767 - Pascal wraps at that point,
+       * this must too. int16_t replicates the 16-bit width exactly. */
+      int16_t delta_ton;
       int8_t speed;
       chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
       if (op == 0xF7) init_sample_disabled = true;
       if (rb(f->data, (uint32_t)chan->address_in_pattern + 1) < 0x56) {
         uint8_t peek = rb(f->data, (uint32_t)chan->address_in_pattern + 1);
-        delta_ton = ASM_TABLE[chan->note] - ASM_TABLE[peek];
-        if (op == 0xF7) delta_ton += chan->current_ton_sliding / 16;
+        delta_ton = (int16_t)(ASM_TABLE[chan->note] - ASM_TABLE[peek]);
+        if (op == 0xF7)
+          delta_ton = (int16_t)(delta_ton + chan->current_ton_sliding / 16);
       } else {
-        delta_ton = chan->current_ton_sliding / 16;
+        delta_ton = (int16_t)(chan->current_ton_sliding / 16);
       }
-      delta_ton <<= 4;
+      delta_ton = (int16_t)(delta_ton << 4);
       speed = (int8_t)rb(f->data, chan->address_in_pattern);
       chan->substruction_for_ton_sliding = (int16_t)(-delta_ton / speed);
       chan->current_ton_sliding = (int16_t)(delta_ton - delta_ton % speed);
@@ -392,6 +404,11 @@ static void asc_get_registers(asc_file* f) {
   ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
   ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
   ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+
+  trace_log_ay(f->global_tick_counter, "asc_a", f->chan_a.ton, f->chan_a.amplitude);
+  trace_log_ay(f->global_tick_counter, "asc_b", f->chan_b.ton, f->chan_b.amplitude);
+  trace_log_ay(f->global_tick_counter, "asc_c", f->chan_c.ton, f->chan_c.amplitude);
+  trace_log_ay(f->global_tick_counter, "asc_mixer", temp_mixer, 0);
 
   f->global_tick_counter++;
 }

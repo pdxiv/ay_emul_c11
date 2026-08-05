@@ -2,9 +2,37 @@
  * engine/include/ay_engine/mfp.h for the ported contract and scope. */
 #include "ay_engine/mfp.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ay_engine/trace_log.h"
+
+/* MIG-0056 Timer A deep-dive only, temporary - AY_ENGINE_TIMERA_TRACE=<path>.
+ * The C11-side sibling of ay_emul/TraceLog.pas's TraceLogTimerA - same
+ * event names and field order, so both logs can be diffed directly
+ * without a translation step. Off unless the env var is set. */
+static FILE* g_timera_trace = NULL;
+static bool g_timera_trace_checked = false;
+static void ensure_timera_trace(void) {
+  if (g_timera_trace_checked) return;
+  g_timera_trace_checked = true;
+  const char* path = getenv("AY_ENGINE_TIMERA_TRACE");
+  if (path != NULL) g_timera_trace = fopen(path, "w");
+}
+static void trace_log_timera(int64_t cycle, const char* event, int value,
+                              int dm, int64_t dr, int64_t base, int64_t delay,
+                              bool ie, bool im) {
+  ensure_timera_trace();
+  if (g_timera_trace == NULL) return;
+  fprintf(g_timera_trace,
+          "cycle=%lld event=%s value=%d dm=%d dr=%lld base=%lld delay=%lld "
+          "ie=%d im=%d pc=%06x a6=%08x d0=%08x\n",
+          (long long)cycle, event, value, dm, (long long)dr, (long long)base,
+          (long long)delay, ie ? 1 : 0, im ? 1 : 0, m68k_bus_get_reg(16),
+          m68k_bus_get_reg(14), m68k_bus_get_reg(0));
+  fflush(g_timera_trace);
+}
 
 /* atari.pas:93 */
 static const int MFP_KOEFS[8] = {0, 4, 10, 16, 50, 64, 100, 200};
@@ -150,10 +178,16 @@ static void set_mfp_register(mfp* m, int num, uint8_t value, int64_t od) {
         m->reg[REG_ISB] = 0;
       }
       break;
-    case REG_TAC:
-      set_timer_delay_mode(&m->timers[0], value & 7, od);
+    case REG_TAC: {
+      mfp_timer* t0 = &m->timers[0];
+      trace_log_timera(od, "write_tac_before", value, t0->dm, t0->dr,
+                        t0->base, t0->delay, t0->ie, t0->im);
+      set_timer_delay_mode(t0, value & 7, od);
       m->reg[REG_TAC] = value;
+      trace_log_timera(od, "write_tac_after", value, t0->dm, t0->dr,
+                        t0->base, t0->delay, t0->ie, t0->im);
       break;
+    }
     case REG_TBC:
       set_timer_delay_mode(&m->timers[1], value & 7, od);
       m->reg[REG_TBC] = value;
@@ -163,7 +197,15 @@ static void set_mfp_register(mfp* m, int num, uint8_t value, int64_t od) {
       set_timer_delay_mode(&m->timers[3], value & 7, od);
       m->reg[REG_TDC] = value;
       break;
-    case REG_TAD: set_timer_data_register(m, &m->timers[0], value); break;
+    case REG_TAD: {
+      mfp_timer* t0 = &m->timers[0];
+      trace_log_timera(od, "write_tad_before", value, t0->dm, t0->dr,
+                        t0->base, t0->delay, t0->ie, t0->im);
+      set_timer_data_register(m, t0, value);
+      trace_log_timera(od, "write_tad_after", value, t0->dm, t0->dr,
+                        t0->base, t0->delay, t0->ie, t0->im);
+      break;
+    }
     case REG_TBD: set_timer_data_register(m, &m->timers[1], value); break;
     case REG_TCD: set_timer_data_register(m, &m->timers[2], value); break;
     case REG_TDD: set_timer_data_register(m, &m->timers[3], value); break;
@@ -281,10 +323,18 @@ int64_t mfp_emulate_timer(mfp* m, int idx, int64_t od) {
   if (t->delay <= 0) return -1;
 
   if (od - t->base >= t->delay) {
+    if (idx == 0) {
+      trace_log_timera(od, "expire_before", 0, t->dm, t->dr, t->base,
+                        t->delay, t->ie, t->im);
+    }
     if (t->ie) request_level6(m, t, od);
     t->base += t->delay;
     t->dr = expand_timer_dr(m->reg[t->txd_index]);
     t->delay = get_mfp_delay(t->dm, t->dr);
+    if (idx == 0) {
+      trace_log_timera(od, "expire_after", 0, t->dm, t->dr, t->base,
+                        t->delay, t->ie, t->im);
+    }
   }
   int64_t result = t->base + t->delay - od;
   return result <= 0 ? 1 : result;

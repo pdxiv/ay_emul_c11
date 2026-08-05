@@ -380,8 +380,21 @@ static void ay_chip_synthesizer_mixer_q(ay_chip* c, const ay_engine* e,
   if (c->noise_en_a) k &= (int)ay_noise_val(c);
   if (k != 0) {
     if (c->envelope_en_a) {
-      lev_l += e->level_al[c->reg[8] * 2 + 1];
-      lev_r += e->level_ar[c->reg[8] * 2 + 1];
+      /* AY.pas:535-536: RegisterAY.AmplitudeA holds the full byte last
+       * written to reg 8, not just the 4-bit amplitude field - real
+       * AY-3-8910 hardware only implements bits 0-3 here (bit 4 is the
+       * envelope-enable flag already consumed by envelope_en_a, bits 5-7
+       * don't exist on the chip), but neither this port nor the Pascal
+       * reference historically masked before indexing Level_AL/AR, so a
+       * digidrum trick that bit-bangs the full byte (values > 15) read
+       * out of bounds past the 32-entry table on both sides - silently
+       * "worked" only by accident, on whatever memory happened to be
+       * adjacent, which differs between the two languages' layouts (see
+       * migration_debt.yaml). Masking to the real 4-bit field is the
+       * only well-defined behavior; matches Amplitudes_AY/YM's own
+       * documented 0-15 domain. */
+      lev_l += e->level_al[(c->reg[8] & 0x0F) * 2 + 1];
+      lev_r += e->level_ar[(c->reg[8] & 0x0F) * 2 + 1];
     } else {
       lev_l += e->level_al[c->ampl];
       lev_r += e->level_ar[c->ampl];
@@ -393,8 +406,8 @@ static void ay_chip_synthesizer_mixer_q(ay_chip* c, const ay_engine* e,
   if (c->noise_en_b) k &= (int)ay_noise_val(c);
   if (k != 0) {
     if (c->envelope_en_b) {
-      lev_l += e->level_bl[c->reg[9] * 2 + 1];
-      lev_r += e->level_br[c->reg[9] * 2 + 1];
+      lev_l += e->level_bl[(c->reg[9] & 0x0F) * 2 + 1];
+      lev_r += e->level_br[(c->reg[9] & 0x0F) * 2 + 1];
     } else {
       lev_l += e->level_bl[c->ampl];
       lev_r += e->level_br[c->ampl];
@@ -406,8 +419,8 @@ static void ay_chip_synthesizer_mixer_q(ay_chip* c, const ay_engine* e,
   if (c->noise_en_c) k &= (int)ay_noise_val(c);
   if (k != 0) {
     if (c->envelope_en_c) {
-      lev_l += e->level_cl[c->reg[10] * 2 + 1];
-      lev_r += e->level_cr[c->reg[10] * 2 + 1];
+      lev_l += e->level_cl[(c->reg[10] & 0x0F) * 2 + 1];
+      lev_r += e->level_cr[(c->reg[10] & 0x0F) * 2 + 1];
     } else {
       lev_l += e->level_cl[c->ampl];
       lev_r += e->level_cr[c->ampl];
@@ -433,7 +446,9 @@ static void ay_chip_synthesizer_mixer_q_mono(ay_chip* c, const ay_engine* e,
   if (c->ton_en_a) k = c->ton_a;
   if (c->noise_en_a) k &= (int)ay_noise_val(c);
   if (k != 0) {
-    lev += c->envelope_en_a ? e->level_al[c->reg[8] * 2 + 1]
+    /* See ay_chip_synthesizer_mixer_q's matching comment - reg[N] must be
+     * masked to its real 4-bit amplitude field before indexing. */
+    lev += c->envelope_en_a ? e->level_al[(c->reg[8] & 0x0F) * 2 + 1]
                              : e->level_al[c->ampl];
   }
 
@@ -441,7 +456,7 @@ static void ay_chip_synthesizer_mixer_q_mono(ay_chip* c, const ay_engine* e,
   if (c->ton_en_b) k = c->ton_b;
   if (c->noise_en_b) k &= (int)ay_noise_val(c);
   if (k != 0) {
-    lev += c->envelope_en_b ? e->level_bl[c->reg[9] * 2 + 1]
+    lev += c->envelope_en_b ? e->level_bl[(c->reg[9] & 0x0F) * 2 + 1]
                              : e->level_bl[c->ampl];
   }
 
@@ -449,7 +464,7 @@ static void ay_chip_synthesizer_mixer_q_mono(ay_chip* c, const ay_engine* e,
   if (c->ton_en_c) k = c->ton_c;
   if (c->noise_en_c) k &= (int)ay_noise_val(c);
   if (k != 0) {
-    lev += c->envelope_en_c ? e->level_cl[c->reg[10] * 2 + 1]
+    lev += c->envelope_en_c ? e->level_cl[(c->reg[10] & 0x0F) * 2 + 1]
                              : e->level_cl[c->ampl];
   }
 
@@ -713,7 +728,37 @@ void ay_synthesizer_stereo16(ay_engine* e) {
     e->current_tik++;
     e->tick_counter_hi++;
   } while (!((uint32_t)e->current_tik >= number_of_tiks_hi(e)));
-  e->number_of_tiks = 0;
+  /* MIG-0056: AY.pas:708/769/854/901 all clear only Number_Of_Tiks.Hi
+   * (the packed variant record's upper 32 bits, the whole-tick count just
+   * fully consumed) - NOT Number_Of_Tiks.Re (the full 64-bit value,
+   * .lo+.hi combined). The lower 32 bits (.Lo) hold the fixed-point
+   * FRACTIONAL remainder left over from the last CurrentTact-to-ticks
+   * conversion and must survive into the next accumulation so sub-tick
+   * precision compounds correctly across calls, exactly the way it
+   * already does across the early-return/int_flag resume path a few
+   * lines above (which never touches number_of_tiks at all). Previously
+   * `e->number_of_tiks = 0` here zeroed BOTH halves, discarding that
+   * fractional remainder on every normal batch completion (i.e. on
+   * nearly every call that doesn't end via the buffer-full early
+   * return) - proven via a standalone partition-independence harness
+   * (feeding the SAME total elapsed cycles through one huge call vs many
+   * production-cadence-sized calls, with no CPU/MFP/SNDH involved): one
+   * huge call produced 1,440,001 frames for exactly 30s-at-8MHz of
+   * input, while the same total split into ~1000-cycle steps produced
+   * only 1,428,481 (11,520 fewer), and a call pattern matching real
+   * atari_emulate_step cadence produced only 1,380,429 (59,572 fewer) -
+   * i.e. splitting the SAME total elapsed cycles into realistic call
+   * granularity was silently losing a fractional remainder every time,
+   * needing measurably MORE total cycles to reach a fixed frame count
+   * than one giant call would. This is the mechanism behind the system-
+   * wide (VBL/Timer A/overall) ~1.35% cycle-vs-audio-duration excess
+   * this ledger has been chasing since MIG-0054. Masking to keep only
+   * the low 32 bits reproduces Pascal's `Number_Of_Tiks.Hi := 0`
+   * exactly - the analogous full reset at ay_engine_reset_chip's own
+   * `e->number_of_tiks = 0` (matching AY.pas:920's `Number_Of_Tiks.Re :=
+   * 0`, a genuine full state reset on chip reset, not a batch-completion
+   * checkpoint) is correct as-is and was NOT changed. */
+  e->number_of_tiks &= 0xFFFFFFFFLL;
   e->current_tik = 0;
 }
 
@@ -756,7 +801,11 @@ void ay_synthesizer_mono16(ay_engine* e) {
     e->current_tik++;
     e->tick_counter_hi++;
   } while (!((uint32_t)e->current_tik >= number_of_tiks_hi(e)));
-  e->number_of_tiks = 0;
+  /* MIG-0056: clear only the whole-tick count (AY.pas's Number_Of_Tiks.Hi),
+   * not the full 64-bit value - see ay_synthesizer_stereo16's identical
+   * reset for the full explanation of why this must preserve the low-32-
+   * bit fractional remainder. */
+  e->number_of_tiks &= 0xFFFFFFFFLL;
   e->current_tik = 0;
 }
 
@@ -810,7 +859,11 @@ void ay_synthesizer_stereo8(ay_engine* e) {
     e->current_tik++;
     e->tick_counter_hi++;
   } while (!((uint32_t)e->current_tik >= number_of_tiks_hi(e)));
-  e->number_of_tiks = 0;
+  /* MIG-0056: clear only the whole-tick count (AY.pas's Number_Of_Tiks.Hi),
+   * not the full 64-bit value - see ay_synthesizer_stereo16's identical
+   * reset for the full explanation of why this must preserve the low-32-
+   * bit fractional remainder. */
+  e->number_of_tiks &= 0xFFFFFFFFLL;
   e->current_tik = 0;
 }
 
@@ -853,6 +906,10 @@ void ay_synthesizer_mono8(ay_engine* e) {
     e->current_tik++;
     e->tick_counter_hi++;
   } while (!((uint32_t)e->current_tik >= number_of_tiks_hi(e)));
-  e->number_of_tiks = 0;
+  /* MIG-0056: clear only the whole-tick count (AY.pas's Number_Of_Tiks.Hi),
+   * not the full 64-bit value - see ay_synthesizer_stereo16's identical
+   * reset for the full explanation of why this must preserve the low-32-
+   * bit fractional remainder. */
+  e->number_of_tiks &= 0xFFFFFFFFLL;
   e->current_tik = 0;
 }

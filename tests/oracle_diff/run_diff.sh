@@ -27,7 +27,7 @@ WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 status=0
-for scenario in zx cpc immediate m68k mfp dma; do
+for scenario in zx cpc immediate immediate_in m68k mfp dma; do
   AY_EMUL_ORACLE="$scenario" AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_$scenario.txt" "$ORACLE_BIN"
   ./dump_engine_state "$scenario" "$WORKDIR/engine_$scenario.txt"
   if cmp -s "$WORKDIR/oracle_$scenario.txt" "$WORKDIR/engine_$scenario.txt"; then
@@ -446,13 +446,39 @@ for fmt in pt1 gtr fls stc stp pt2 fxm psm asc asc0 ftc psc sqt; do
   fi
 done
 
-# wav_export (SNDH): deliberately NOT gated here. Driving the real Pascal
-# 68000 interpreter through MakeBufferSNDH for this file is extremely slow
-# (a single 512-frame call took 3+ minutes of wall-clock time in this
-# environment) and ends with Real_End_All becoming true with zero frames
-# produced, for reasons not yet diagnosed - see OracleHarness.pas's
-# RunSNDHWAVExportTest comment and migration_debt.yaml MIG-0021/MIG-0026.
-# Adding it to this automated suite would make every run multi-minutes
-# slower for a comparison that doesn't currently produce useful output.
+# identify_file: re-verifies MIG-0023's structural tracker detectors
+# against every real sample file test_corpus_76 has for a
+# no-byte-signature format (7 of the original 10; ST1/ST3/STF remain
+# unrepresented in the corpus) - this became possible once those files
+# were added by the songs/ -> test_corpus_76 migration but had not been
+# exercised as an automated gate before.
+for id_fmt in NEWDANCE.asc:ASC MISTERS_BOX.as0:ASC0 "Girls_of_Meladze.stp:STP" \
+              DEMON.pt1:PT1 "NOR.MUS..pt2:PT2" MotorAnimation.sqt:SQT \
+              SimpletonGift1.fls:FLS; do
+  id_fname="${id_fmt%%:*}"
+  id_expected="${id_fmt##*:}"
+  AY_EMUL_ORACLE=identify_file AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/$id_fname" \
+    AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_identify_$id_expected.txt" "$ORACLE_BIN"
+  id_oracle_format=$(sed -n 's/^format=//p' "$WORKDIR/oracle_identify_$id_expected.txt")
+  id_tool_format=$("$ROOT/tools/identify_ay_file/identify_ay_file" \
+    "$ROOT/test_corpus_76/$id_fname" | sed -n 's/.* format=\([A-Za-z0-9_]*\).*/\1/p')
+  if [ "$id_oracle_format" = "$id_tool_format" ] && [ "$id_oracle_format" = "$id_expected" ]; then
+    echo "[PASS] identify_file ($id_fname): oracle and identify_ay_file both agree format=$id_expected"
+  else
+    echo "[FAIL] identify_file ($id_fname): oracle=$id_oracle_format tool=$id_tool_format expected=$id_expected"
+    status=1
+  fi
+done
+
+# wav_export (SNDH): deliberately NOT gated here. This was originally
+# noted (MIG-0021/0026) as producing zero frames after a 3+ minute stall,
+# but that was from a much earlier, now-long-since-fixed state of
+# engine/src/sndh_file.c (see MIG-0045 through MIG-0055) - SNDH WAV
+# export via ay_player works correctly now, and RunSNDHWAVExportTest
+# (used extensively, manually, throughout that whole investigation) does
+# too. Still not wired into this automated loop because it needs a much
+# longer NumBuffers setting than the other formats' WAV gates to be a
+# meaningful comparison (30s of audio, not ~10s), making it noticeably
+# slower per run - a real gap worth closing, not a stale non-issue.
 
 exit $status

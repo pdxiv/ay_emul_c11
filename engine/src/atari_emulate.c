@@ -3,6 +3,7 @@
  * scope. */
 #include "ay_engine/atari_emulate.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "ay_engine/trace_log.h"
@@ -203,6 +204,17 @@ void atari_emulate_init(atari_emulate* a, uint8_t* mem, uint32_t mem_size,
 
   m68k_bus_activate(&a->bus);
   m68k_bus_reset(&a->bus);
+
+  /* MIG-0056: opt-in, gated the same way as engine/trace_log.c's env vars -
+   * off unless explicitly requested. */
+  if (getenv("AY_ENGINE_STARSCREAM_TIMING") != NULL) {
+    atari_emulate_enable_starscream_timing(a, true);
+  }
+}
+
+void atari_emulate_enable_starscream_timing(atari_emulate* a, bool enable) {
+  (void)a; /* singleton Musashi core - see m68k_bus.h's file comment */
+  m68k_bus_enable_starscream_timing_override(enable);
 }
 
 /* atari.pas:1436-1523 */
@@ -268,18 +280,6 @@ void atari_emulate_step(atari_emulate* a) {
     }
   }
 
-  /* MIG-0051: real 68000 IPL priority is BY LEVEL NUMBER (7=highest/NMI,
-   * 1=lowest) - MFP's level 6 outranks VBL's level 4, so if both happen
-   * to be outstanding at once (entirely possible once digidrum/envelope
-   * timers are active alongside the VBL handler), level 6 must win.
-   * Starscream's own flush_interrupts (Starcpu32.asm) scans from level 7
-   * down to 1, confirming this is the real priority order, not an
-   * arbitrary choice - this was previously checked backwards (VBL first,
-   * MFP as the fallback). Shared with int_ack's own re-assertion after
-   * acknowledging - see compute_irq_level, MIG-0052. */
-  int irq_level = compute_irq_level(a);
-  m68k_bus_set_irq(&a->bus, irq_level);
-
   int64_t min = a->base_vbl + a->vbl_period - od;
   if (min <= 0) min = 1;
 
@@ -287,6 +287,46 @@ void atari_emulate_step(atari_emulate* a) {
     int64_t t = mfp_emulate_timer(&a->mfp, i, od);
     if (t > 0 && min > t) min = t;
   }
+
+  /* MIG-0054: this MUST run AFTER the mfp_emulate_timer loop above, not
+   * before it (as it did until this fix). atari.pas's EmulateTimer calls
+   * s68000interrupt(6,vec) SYNCHRONOUSLY at the exact moment it detects a
+   * timer expiry - Starscream's pending-interrupt state is updated before
+   * min is computed and before s68000exec(min) runs, for every timer,
+   * every call. mfp_emulate_timer's C11 port mirrors this faithfully for
+   * its OWN bookkeeping (m->level6_pending is set synchronously inside
+   * the loop above, request_level6()), but m68k_bus_set_irq - the call
+   * that actually tells MUSASHI about the pending level - was being made
+   * from a `compute_irq_level(a)` snapshot taken BEFORE this loop ran,
+   * using stale state. Any timer that first expired partway through THIS
+   * very call (the overwhelmingly common case, since a fresh expiry is
+   * exactly what makes `min` small enough to end the previous call here)
+   * would sit fully invisible to Musashi - its IRQ line never raised -
+   * for this entire call's `min`-cycle exec() burst, however large;
+   * Musashi could only notice it on the NEXT atari_emulate_step call, one
+   * full step (observed up to ~18000-40000 cycles in a 30s Temple_of_
+   * Asherah.sndh render) later than Starscream ever would have. Direct
+   * single-step comparison confirmed the mechanism precisely: a step
+   * that computed min=18096/used=18096 (a full, uninterrupted burst) with
+   * a level-6 "assert" trace event logged at the very START of that same
+   * burst - meaning the interrupt was known to mfp.c's own state the
+   * whole time but never passed to Musashi until 18096 cycles later.
+   * This dwarfs the previously-documented "SR mask=7 critical section
+   * marginally exceeding Timer A's own period" explanation (which
+   * remains real but is a much smaller, secondary effect) and accounts
+   * for the bulk of the Timer A/B/D coalesce-rate gap against the oracle
+   * (all three vectors coalescing 25-97% of their asserts here, vs
+   * 0-3.6% oracle-side, pre-fix). Real 68000 IPL priority is BY LEVEL
+   * NUMBER (7=highest/NMI, 1=lowest) - MFP's level 6 outranks VBL's level
+   * 4, so if both happen to be outstanding at once (entirely possible
+   * once digidrum/envelope timers are active alongside the VBL handler),
+   * level 6 must win. Starscream's own flush_interrupts (Starcpu32.asm)
+   * scans from level 7 down to 1, confirming this is the real priority
+   * order, not an arbitrary choice - this was previously checked
+   * backwards (VBL first, MFP as the fallback). Shared with int_ack's own
+   * re-assertion after acknowledging - see compute_irq_level, MIG-0052. */
+  int irq_level = compute_irq_level(a);
+  m68k_bus_set_irq(&a->bus, irq_level);
 
   bool dma_active = false;
   int64_t dma_boundary = dma_sound_next_boundary_cycles(&a->dma, a->mc68000_freq);
@@ -358,6 +398,10 @@ void atari_emulate_step(atari_emulate* a) {
    * "fixed" by a change that turned out to cause a much larger problem
    * elsewhere. */
   a->cycle_count += used;
+  /* MIG-0056: drains any Starscream-timing-override correction accumulated
+   * during this call's exec() burst (no-op, always 0, unless explicitly
+   * enabled via atari_emulate_enable_starscream_timing - see m68k_bus.h). */
+  a->cycle_count += m68k_bus_take_timing_correction();
 
   if (dma_active) {
     /* atari.pas:1695-1726, SynthesizerSNDH - the same tick-accumulation

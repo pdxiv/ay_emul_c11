@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "ay_engine/trace_log.h"
+
 /* All multi-byte header fields in a real .ay file are big-endian (see
  * Players.pas's pervasive SwapEndian() calls on header fields - the
  * packed records are read raw off disk into little-endian Pascal
@@ -49,12 +51,25 @@ static void on_ay_write(void* ud, uint8_t reg, uint8_t data) {
    * is just the single flush-then-apply the contract in z80_bus.h
    * documents. */
   ay_synthesizer_ay(&f->ay, f->bus.current_tact);
+  trace_log_ay(f->bus.current_tact, "write_apply", reg, data);
   ay_chip_set_ay_register(&f->ay.chip, reg, data);
+}
+
+/* Z80.pas's ZXInProc/InitialInProc/CPCInProc (live): `Dat := SoundChip[0].
+ * RegisterAY.Index[AY_CurReg]` when AY_CurReg < 14 - a plain read of the
+ * last value SetAYRegister stored, no synthesizer flush needed (unlike
+ * on_ay_write, reading back doesn't change chip state). z80_bus.c's
+ * zx_in/cpc_in already gate this call on ay_cur_reg < 14 themselves, so
+ * this callback can read c->reg[reg] unconditionally. */
+static uint8_t on_ay_read(void* ud, uint8_t reg) {
+  ay_file* f = (ay_file*)ud;
+  return f->ay.chip.reg[reg];
 }
 
 static void on_beeper_change(void* ud, int level) {
   ay_file* f = (ay_file*)ud;
   ay_synthesizer_ay(&f->ay, f->bus.current_tact);
+  trace_log_ay(f->bus.current_tact, "beeper_toggle", -1, level);
   f->ay.beeper = level;
 }
 
@@ -154,12 +169,23 @@ ay_file_status ay_file_load(ay_file* f, const uint8_t* data, size_t size,
   f->bus.ay_file_enable_auto_switch = true; /* PlayList.pas:811-814 */
   f->bus.on_ay_write = on_ay_write;
   f->bus.ay_write_userdata = f;
+  f->bus.on_ay_read = on_ay_read;
+  f->bus.ay_read_userdata = f;
   f->bus.on_beeper_change = on_beeper_change;
   f->bus.beeper_userdata = f;
   f->bus.on_chip_freq_change = on_chip_freq_change;
   f->bus.chip_freq_userdata = f;
 
   ay_engine_calculate_level_tables(&f->ay);
+  /* AY.pas: ZXOutProc/InitialOutProc read the global BeeperLevel directly;
+   * z80_bus.h's beeper_on_level is the C11 bridge for that same value -
+   * this caller-supply step was missing, leaving beeper_on_level at its
+   * zero-init default and silently dropping the beeper/digidrum channel
+   * entirely (MIG-0057). Was left disabled pending MIG-0061 (T21.ay's
+   * spurious beeper-port toggle, root-caused to on_ay_read never being
+   * wired up - IN A,(C) always returned 0xFF instead of the real
+   * register value) - now fixed, safe to enable. */
+  f->bus.beeper_on_level = f->ay.beeper_level;
   ay_engine_reset_chip(&f->ay, true);
 
   /* Players.pas:3944-3948. */

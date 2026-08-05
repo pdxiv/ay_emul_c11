@@ -238,7 +238,18 @@ void z80_bus_step(z80_bus* bus) {
 
   if (bus->int_pending_this_frame) {
     if (!bus->cpu.int_pending) {
-      /* Accepted this step (superzazu/z80 cleared it in process_interrupts). */
+      /* Accepted this step (superzazu/z80 cleared it in process_interrupts).
+       * MIG-0018: Z80.pas's own live Z80_Step (the noASM branch past its
+       * `{$else Z80Emu_noASM}`) charges 12 T-states for an IM1 interrupt
+       * accept and 18 for IM2 - superzazu/z80 charges the standard 13/19
+       * (z80.c's `z->cyc += 13`/`+= 19`, matching Zilog's own documented
+       * timing and every other reputable Z80 core). Per explicit user
+       * direction: superzazu/z80 is the correct reference here, not
+       * Z80.pas - this is a genuine bug/quirk in the ORIGINAL Pascal
+       * implementation, not something this port should replicate. Left
+       * uncorrected deliberately (see migration_debt.yaml MIG-0018) -
+       * this is the one place in the whole port where the original's
+       * behavior is knowingly NOT what the C11 side matches. */
       bus->int_pending_this_frame = false;
     } else if (bus->current_tact >= bus->int_length) {
       /* Z80.pas only accepts the interrupt while CurrentTact < IntLength

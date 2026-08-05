@@ -148,6 +148,12 @@ void atari_emulate_init(atari_emulate* a, uint8_t* mem, uint32_t mem_size,
  * (Players.pas/Phase 2). */
 void atari_emulate_step(atari_emulate* a);
 
+/* MIG-0056, EXPERIMENTAL / OPT-IN, explicit user directive: thin wrapper
+ * around m68k_bus_enable_starscream_timing_override - see m68k_bus.h for
+ * the full mechanism/scope/policy-history comment. Off by default; call
+ * once after atari_emulate_init to enable. */
+void atari_emulate_enable_starscream_timing(atari_emulate* a, bool enable);
+
 /* atari.pas: Atari_CheckOuts (1574-1596), the AY-register half only (the
  * DMA-sound IntDMASnd branch has no equivalent here yet - no in-scope test
  * file uses DMA sound, see migration_debt.yaml). Applies any writes

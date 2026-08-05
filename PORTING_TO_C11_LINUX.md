@@ -284,9 +284,23 @@ bindings" — it's a whole RTTI-driven component/property/streaming system
 (published properties, `.lfm` resources deserialized at runtime, see §5).
 There's no C library that provides this model. A C port means writing
 direct GTK C API calls (`gtk_button_new()`, manual signal connection,
-etc.) — GTK2 is EOL upstream; **GTK3 or GTK4 in C** is the realistic
-target for new code, not a GTK2 C rewrite. This is a full UI redesign, not
-a mechanical translation — see §5 for scope.
+etc.).
+
+**Decision: GTK2, matching the original, not GTK3/4.** GTK2 is EOL
+upstream, which would ordinarily push new code toward GTK3/4 — but this
+port's Phase 5 decision (§5/§8) is to reproduce `MainWin.pas`'s exact
+skinned UI (custom `.ays`/`.bmc` skin format, non-rectangular window
+shaping, hand-painted hit-testing), and Ubuntu 20.04's `libgtk2.0-dev`
+is the same toolkit generation the original binary already links
+against and that this port's build environment already has installed.
+Matching GTK2 keeps the skin/region/hit-testing code a direct,
+mechanical translation of the original's own GDK/GTK2 calls rather than
+an extra translation layer on top of a differently-shaped API (GTK3's
+widget/CSS model, or GTK4's, differ enough from GTK2 to make that
+translation non-trivial for no real benefit here). This is a full UI
+redesign relative to the LCL's RTTI/streaming model either way, not a
+mechanical translation — see §5 for scope — the GTK-version choice only
+affects which flavor of that redesign work looks like.
 
 ### 4.2 ALSA — a straightforward, arguably *easier* port
 
@@ -599,6 +613,414 @@ fidelity-risk/payoff tradeoff is genuinely different in each case.
 | MC68000 (Atari ST) | `Starcpu*.o` — precompiled **Starscream** core (Neill Corlett, modified by Stéphane Dallongeville/Carsten Elton Sørensen — credited in `credits.txt`) | **Decided: [Musashi](https://github.com/kstenerud/Musashi)** (Karl Stenerud's 68000 core, plain C, actively maintained) | Musashi: unambiguously MIT. Starscream: ⚠️ no license file ships in this repo — only an author credit | Starscream's `.o` is technically a zero-cost, C-ABI-compatible reuse (confirmed via `nm` — see §3.2), but with no confirmed redistribution license it's not an acceptable dependency for this rewrite, so we're not using it. Musashi costs real integration work Starscream would have avoided (writing the memory/interrupt glue Musashi expects, rather than reusing `Starcpu.inc`'s existing `external` declarations almost verbatim), but that's the tradeoff for clean licensing. |
 | AY/YM sound chip | `AY.pas` (`TSoundChip`, only 3 asm blocks) | `ayumi` (MIT) or `libayemu` (LGPL) | permissive | Much lower risk than the Z80 swap (small surface, no timing-critical dispatch loop) — but §3 flags a point that still applies here: this project's `Amplitudes_AY` DAC table is explicitly credited to "Hacker KAY" and is a deliberate, specific tuning choice. Adopting a library's own table changes the audio output; treat that as a conscious fidelity decision, not a transparent substitution, and consider keeping this project's table plugged into the library if it exposes that as a parameter. |
 
+### 7.1.1 When a CPU core's raw timing disagrees with the original: the C library wins, not the oracle
+
+This port's general rule (§8.1) is that `ay_emul` is the oracle and any
+disagreement is presumed a bug in the port, not the original. **Raw CPU
+instruction/interrupt timing is the one deliberate exception**, decided
+explicitly during the port (not a default to assume elsewhere): superzazu/
+z80 and Musashi are both mature, widely-used, independently-validated
+implementations of a real, physical, precisely-documented CPU
+(superzazu/z80 passes ZEXALL/ZEXDOC per §7.1's gate; Musashi is the 68000
+core behind MAME's own extensive test suite). If either of Z80.pas's live
+interpreter or Starscream — the two original Pascal/asm CPU cores this
+port replaces — disagrees with the corresponding C library on a
+standard, well-documented timing value (an opcode's cycle cost, an
+interrupt-acknowledge cycle count, etc.), the presumption inverts for
+that specific question: **the original Pascal CPU core is bugged, not
+this port**, and the C11 side should keep the C library's correct value
+rather than replicate the original's error.
+
+Two confirmed real examples, both found by direct source comparison
+rather than assumed:
+
+- **Z80 interrupt-accept timing** (`MIG-0018`): Z80.pas's live `Z80_Step`
+  charges 12 T-states for an IM1 interrupt accept and 18 for IM2;
+  superzazu/z80 charges the standard, Zilog-documented 13/19. A one-line
+  fix to match Z80.pas's 12/18 was written, verified to close part of a
+  real oracle-diff gap, and then deliberately reverted - matching
+  Z80.pas here would make this port's Z80 timing non-standard on purpose.
+- **68000 opcode costs** (`MIG-0053`): Starscream's own cycle model
+  charges `ADDA.L <ea>,An` (register-source) 8 cycles and Musashi charges
+  the standard 6; conversely Musashi charges `CLR.W`-to-memory and
+  `ADD.W`-immediate 2 cycles more than Starscream's model. Musashi's
+  values match the well-known, published Motorola 68000 instruction-timing
+  table; Starscream's don't, for these specific cases.
+
+This exception is intentionally narrow: it applies to raw CPU core
+timing questions only (opcode cycle costs, interrupt-acknowledge
+timing, and similar CPU-internal bus-cycle accounting), decided by
+checking a well-documented external reference (the Zilog/Motorola
+timing tables, or the C library's own well-tested cycle tables), not a
+license to second-guess `ay_emul`'s behavior generally. Every other
+"the original does X, is X right?" question in this port still defaults
+to matching `ay_emul` exactly, bug-for-bug if necessary (see §8.1) -
+Atari MFP scheduling, AY register masking, VBL timing, and everything
+else this project has spent real effort matching byte-for-byte were
+each investigated and found to need matching `ay_emul`, not overriding
+it. Don't extend this CPU-timing exception to other subsystems without
+the same standard-reference cross-check that justified it here.
+
+**Vendored core files themselves are never edited (explicit user
+directive, still standing): `engine/third_party/musashi`'s and
+`engine/third_party/z80`'s actual CPU-emulation source files
+(`m68k_in.c`/`m68kops.c`/`m68kcpu.c`, `z80.c`) are never patched, full
+stop** - "they're correct, and they should work." `MIG-0054` hit this
+directly: a 1.34%-over-30-seconds cumulative Musashi-vs-Starscream
+clock-rate drift (far larger than MIG-0053's original ~0.07% sample
+suggested) was found and, at the time, left permanently unpatched at
+the vendored-cycle-table level for this reason.
+
+**Revised, narrower scope (explicit user directive, reversing the
+original blanket "never override CPU timing toward Starscream" framing
+- `MIG-0056`): hook-based, opt-in corrections that leave the vendored
+files completely untouched are permitted.** Musashi ships a genuine,
+documented integration point for exactly this - `M68K_INSTRUCTION_HOOK`
+(an `m68kconf.h` config flag, not a core-logic change) plus
+`m68k_set_instr_hook_callback()`, which fires once per instruction from
+*inside* Musashi's normal batched `m68k_execute()` loop with no
+measurable performance cost (benchmarked: ~300-310ms for a 30s render
+with the hook registered and doing real per-instruction work, versus
+~320-336ms unmodified - both trivial compared to the ~10s that forced
+single-instruction stepping costs for the same render, MIG-0054's
+earlier finding). `engine/m68k_bus.c`'s `m68k_bus_enable_starscream_
+timing_override()` (off by default; `MIG-0056`) uses this hook to
+correct this port's own `cycle_count` ledger - not Musashi's internal
+dispatch/timing, which stays exactly as-is - toward Starscream's
+declared cost for a small, explicitly enumerated set of opcode+
+addressing-mode patterns already known (`MIG-0053`) to differ.
+
+Building this actually produced a useful, humbling result: measured on
+Temple_of_Asherah.sndh, the 3 known-mismatched patterns fire only 2,650
+times out of 2,773,601 total instructions (0.096%) - accounting for at
+most ~10,000 of the ~3,205,130-cycle gap (~0.3% of it). Comparing both
+the corrected and uncorrected results against the *physically-correct*
+baseline (exactly `30s * 8,000,000 Hz` cycles, not just against the
+oracle) showed the oracle itself lands within +0.018% of that exact
+value, while this port sits at +1.353% *before* the override and
++1.358% *after* - the override made the overcounting marginally worse,
+not better. This falsifies "aggregate per-opcode cost bias" as the
+drift's dominant mechanism; something else in this port's own
+cycle-accounting is the real, still-unidentified cause (see
+`MIG-0056`'s full writeup). The takeaway for future work: **a port-side
+scheduling/accounting bug, not a CPU-core cost difference, is now the
+leading suspect** - exactly the category of fix `MIG-0054`'s own two
+real bugs (missing timeslice-release, stale IRQ-level snapshot) already
+came from, found and fixed without touching Musashi at all.
+
+**Cycle-accounting model and its verified invariant.** A follow-up
+investigation (`MIG-0056`) traced the full cycle-budget lifecycle in
+`engine/atari_emulate.c` to rule out a bookkeeping bug as the drift's
+source. The model is deliberately simple: `atari_emulate.cycle_count`
+(`int64_t`) is incremented in exactly two places, both in
+`atari_emulate_step` - `a->cycle_count += used;` (Musashi's own honest,
+unpadded `m68k_bus_exec` return value) and `a->cycle_count +=
+m68k_bus_take_timing_correction();` (MIG-0056's opt-in override, always
+0 unless explicitly enabled). Unlike `atari.pas`'s odometer (which
+periodically rebases itself downward to dodge 32-bit overflow, per
+`atari.pas:294-295`/`TraceLog.pas`'s `AbsCycle` compensation), this port
+uses a plain 64-bit accumulator with no realistic overflow risk and
+never resets it. **The invariant this must always satisfy**: summing
+`used` across every `atari_emulate_step` call for a render must equal
+that render's final `cycle_count` exactly, with zero unaccounted
+remainder - verified empirically (not just by inspection) on a 30s
+Temple_of_Asherah.sndh capture: `sum(used)` over 302,832 steps =
+243,241,138, identically matching that run's actual final `cycle_count`.
+Any future change to the scheduling loop must preserve this - if it
+ever stops holding, that itself would indicate a genuine double-count
+or lost-carry bug (which, per this investigation, is not currently
+present).
+
+Given that invariant holds, the ~1.34%/30s drift is **not a ledger bug**
+- every cycle in the final total corresponds to real, honestly-reported
+Musashi execution. The excess must come from this port genuinely doing
+more real work (more instructions, more expensive ones, or more
+interrupt services) than `ay_emul` does for equivalent content. MIG-0056
+ruled out, by direct source comparison (not assumption) with
+`atari.pas`, several strong candidates: VBL period computation (bit-
+exact), the DMA-sound subsystem (provably inactive for this test file),
+and both of `mfp.c`'s timer-period formulas (`get_mfp_delay`,
+`calc_timer_cnt`/`set_timer_delay_mode`) including their truncation
+convention (both engines truncate, neither rounds - verified against
+`atari.pas:389-432` line-by-line). It also empirically quantified two
+small, non-dominant real contributors: MIG-0053's `min=1` dispatch-
+guarantee cap (~2.2% of the gap, confirmed via a direct A/B rebuild-and-
+measure test) and the known opcode-cost-pattern mismatches (~0.3% of the
+gap, from MIG-0056's own override experiment). MFP Timer A services 3.1%
+more often on this port than the oracle for identical content (113,874
+vs 110,472 over 30s, with assert count exactly equal to service count -
+no residual coalesce/backlog) - since the ledger is proven honest, this
+represents genuinely extra real interrupt-handler execution, not
+phantom accounting.
+
+**Verified Timer A state model** (MIG-0056 follow-up, using new
+`AY_ENGINE_TIMERA_TRACE`/`AY_EMUL_TIMERA_TRACE` instrumentation - kept
+as permanent, disabled-by-default diagnostic infrastructure alongside
+this project's other trace types). Confirmed identical to `atari.pas:
+394-432`, source-level: writing the data register (TAD) while the timer
+is STOPPED (DM=0) immediately reloads the active counter; writing it
+while RUNNING (DM<>0) only updates the value picked up on the timer's
+own next natural reload - the in-flight countdown is untouched.
+Changing the delay mode (control register) while already running, to a
+different nonzero mode, rebases the timer's phase by the exact ratio of
+old/new prescaler coefficients rather than resetting it. Transitioning
+DM to/from 0 (stop/start) does reset phase. All three confirmed both by
+direct source comparison and by matching live trace behavior on both
+engines.
+
+Given that model is correct, MIG-0056 partitioned a full 30s render into
+Timer A "configuration epochs" (a new epoch begins whenever a register
+write or post-expiration reload changes DM/DR) and compared per-epoch
+expiration counts between engines, aligned by sequence order. Within
+steady, unchanging-configuration epochs, per-epoch counts matched within
++/-1 and the cumulative difference across 400+ epochs stayed small and
+bounded (-18..+2) - **not** growing toward the 3,402-event gap. This
+rules out a steady-state per-expiration rate defect: given a fixed
+configuration, this port generates expirations at exactly the oracle's
+rate. The gap is instead concentrated in the 68000 program's own
+periodic full stop/restart of Timer A (its digidrum-loop re-trigger,
+roughly once per second) - this port completes 77 such restart cycles
+in 30s versus the oracle's 74, and 3 extra cycles at ~1,451 expirations
+each (~4,354 predicted) accounts for nearly all of the measured 4,320-
+expiration excess confined to those spans (a much smaller ~918-event
+offsetting effect exists elsewhere, unexplored). **This is a downstream
+symptom, not an MFP defect**: the program's own restart-trigger logic
+fires a few extra times simply because this port's overall cycle-count
+reaches whatever condition it checks measurably sooner than the oracle
+does per unit of real audio time - the same still-unresolved general
+drift question above. Future work on the remaining gap should look
+for that upstream cause (what specifically makes this port's clock run
+measurably ahead - not yet found despite VBL/DMA/MFP-formula/opcode-
+cost/dispatch-cap rule-outs), not at Timer A's own reload/reconfiguration
+logic, which is now confirmed correct.
+
+**Invariant this establishes for future changes**: Timer A's (and by
+extension the other three MFP timers', which share the same
+`set_timer_delay_mode`/`set_timer_data_register`/`calc_timer_cnt` code
+path) per-configuration expiration rate must continue to match
+`atari.pas` epoch-for-epoch. If a future change to `mfp.c` regresses
+this, it would show up as the per-epoch cumulative drift test above
+growing unboundedly rather than staying small and bounded - that
+specific signature (bounded per-epoch drift vs. unbounded per-epoch
+drift) is the fastest way to distinguish "a genuine new MFP timing bug"
+from "the still-open upstream clock-rate question" if this investigation
+is resumed.
+
+**Upstream scheduler/timebase follow-up (MIG-0056) - the drift is system-
+wide, not MFP-specific.** Tested the leading hypothesis - uncarried
+instruction-boundary overshoot ("scheduler debt") - directly rather than
+by inspection alone. Structurally, `atari_emulate_step` cannot lose
+overshoot: every deadline (`min = base_vbl + vbl_period - od`, and each
+MFP timer's `t->base + t->delay - od`) is recomputed fresh from live
+`a->cycle_count` at the top of every call, and `cycle_count` is never
+reset or tracked as a separate "budget" that could be clamped - any
+prior overshoot is automatically folded into the next deadline for
+free, unlike a `budget -= consumed; clamp at 0` pattern. Measured (not
+assumed) the actual overshoot distribution across 302,832 steps of a 30s
+render: positive overshoot (a call finishing its in-flight instruction
+past budget) sums to 2,715,982 cycles - superficially close in order of
+magnitude to the ~3.2M-cycle gap. But MIG-0053's `min=1` dispatch
+guarantee - which accounts for the single largest source of small,
+overshoot-prone calls (54.8% of all steps) - was already A/B tested
+directly (disable it, rebuild, measure): the total changes by only
+70,531 cycles (2.2% of the gap). If per-call overshoot were the dominant
+mechanism, removing most of the small-budget calls should have removed
+most of the 2.7M; it didn't. Overshoot is real but not dominant.
+
+**The decisive new finding: VBL shows the identical excess rate as
+Timer A and the overall cycle count.** VBL is a completely independent
+subsystem from MFP Timer A - a fixed-modulus counter with no program-
+visible state or opcode execution involved in its own periodicity, and
+its cycle-domain period (40,000 cycles = 200Hz) is already confirmed
+bit-exact. Measured its assert rate per real rendered second on a 30s
+capture: oracle 5,994 asserts / 1,440,256 frames = 199.77 Hz (landing
+almost exactly on the true 200Hz); this port 6,074 asserts / 1,440,000
+frames = 202.47 Hz - a +1.35% excess, matching the whole-render cycle-
+count excess (+1.353%) and Timer A's own service excess (+3.1%, same
+direction) closely. Two structurally unrelated subsystems (VBL, MFP
+Timer A) showing the same-direction, same-order-of-magnitude excess
+rules out a defect specific to either one - **the excess cycle-count-
+per-rendered-second is a uniform, system-wide property**, not a Timer-A/
+digidrum-specific bug and not a pure per-opcode-cost artifact (which
+would not manifest in VBL's own periodicity at all, since nothing about
+VBL's timing depends on which opcodes ran). Per this investigation's own
+divergence classification, this is a "timing-only" signature: the
+machine reaches equivalent audio output at a systematically higher
+elapsed-cycle cost, with no evidence of differing register/memory state
+driving it.
+
+**This points at the audio-generation mechanism (`ay_synthesizer_ay`'s
+tick accumulator, `engine/ay.c`) as the most likely remaining locus**,
+since if cycle_count-to-VBL-count and cycle_count-to-Timer-A-count are
+both exact, the only remaining place a fixed elapsed cycle_count could
+correspond to a *different* number of rendered audio samples between
+engines is in the cycle-to-sample conversion itself - despite its own
+ratio constant (`frq_ay_by_frq_z80` = 134,217,728, an exact power-of-2
+relationship) already being confirmed bit-identical between engines.
+No specific defect was confirmed there in this pass; the accumulator's
+own math (`tmp := number_of_tiks + (current_tact-previous_tact)*ratio`,
+committing `previous_tact` forward only on a successful, non-early-exit
+update) is a monotonic linear accumulation that should be mathematically
+independent of call frequency for a fixed elapsed cycle span, and no
+overflow risk was found (deltas are of order 10^3-10^5, ratio ~2^27,
+products stay far below `int64` range). No specific defect was
+identified by inspection alone - the fix (below) was found by building
+the exact call-cadence-dependence test this section calls for, not by
+further reading.
+
+**Root cause found and fixed: a packed-variant-record partial-reset,
+mistranslated as a full reset.** A standalone harness (no CPU/MFP/SNDH -
+just `ay_synthesizer_ay` fed a fixed 240,000,000-cycle total, split
+across different call partitions) proved the accumulator's own
+behavior WAS call-partition-dependent: one giant call and uniform
+1-cycle calls both produced 1,440,001 frames (correct), but uniform
+1000-cycle calls produced only 1,428,481 (11,520 fewer) and a call
+pattern matching real `atari_emulate_step` cadence produced only
+1,380,429 (59,572 fewer) - for the identical total elapsed cycles.
+Comparing `engine/ay.c`'s four `ay_synthesizer_{stereo,mono}{16,8}`
+functions against `AY.pas`'s four equivalent sites (lines 708, 769,
+854, 901) found the exact divergence: every Pascal site ends its whole-
+tick processing loop with `Tmp := 0; Number_Of_Tiks.Hi := Tmp;`, never
+`Number_Of_Tiks.Re := Tmp`. `Number_Of_Tiks` is declared (`AY.pas:
+143-148`) as an explicit packed variant record - `case boolean of
+False:(lo,hi:longword); True:(re:int64)` - so `.Hi`/`.Lo` are literally
+the upper/lower 32 bits of `.Re`. `Number_Of_Tiks.Hi := 0` clears only
+the just-consumed whole-tick count, leaving `.Lo` - the fixed-point
+FRACTIONAL remainder carried from the last cycle-to-ticks conversion -
+completely intact for the next call. The C11 port's `e->number_of_tiks
+= 0` zeroed the entire 64-bit value every time, silently discarding
+that fractional remainder on nearly every call (since the backstop call
+in `sndh_file_make_buffer` fires on almost every `atari_emulate_step`).
+Each loss was tiny, but at real production call cadence (~300,000 calls
+in a 30s render) the losses compounded into needing measurably more
+elapsed CPU cycles to reach any fixed audio-frame count - the exact
+mechanism behind the system-wide (VBL, Timer A, and overall) ~1.35%
+excess this section had been chasing.
+
+**Fix**: all four sites changed from `e->number_of_tiks = 0;` to
+`e->number_of_tiks &= 0xFFFFFFFFLL;` (mask to the low 32 bits, exactly
+reproducing `Number_Of_Tiks.Hi := 0`'s effect on the packed layout).
+The genuine full-reset at `ay_engine_reset_chip` (`e->number_of_tiks =
+0`, matching `AY.pas:920`'s real `Number_Of_Tiks.Re := 0` on chip
+reset, not a batch-completion checkpoint) was correctly left unchanged.
+
+**Verified effect, re-running the harness**: all four partition
+strategies now produce identical results (1,440,001 frames, identical
+final accumulator state) regardless of call cadence - partition
+independence restored. **On the real 30s `Temple_of_Asherah.sndh`
+render**: final cycle count 243,248,236 (+1.3534% over the exact
+240,000,000 baseline) -> 239,999,278 (**-0.0003%** - closer to exact
+than the oracle's own +0.0180%); VBL rate 202.47Hz -> 199.73Hz (oracle
+199.77Hz, true 200Hz); MFP Timer A assert count 113,874 -> 110,374
+(oracle 110,472); Timer A restart-cycle count 77 -> 75 (oracle 74, a
+small bounded residual, not chased further); whole-clip zero-lag WAV
+correlation 0.1255 -> 0.5593 with **no lag/time-warp compensation
+needed at all** (previously a large, growing lag correction was
+required for any meaningful correlation); 50ms-envelope correlation
+0.9802. `tests/oracle_diff/run_diff.sh` (60/60) and `tools/ay_player/
+smoke_test.sh` (21/21) both still pass in full.
+
+**Verified audio timebase contract, invariants future changes must
+preserve**:
+- `engine/ay.c`'s `ay_engine.number_of_tiks` is a 64-bit fixed-point
+  accumulator mirroring `AY.pas`'s packed `Number_Of_Tiks` variant
+  record exactly: the low 32 bits are a fractional cycle-to-tick
+  remainder, the high 32 bits are the whole-tick count available to
+  process. **Any code that clears only the "batch consumed" whole-tick
+  count (matching Pascal's `.Hi := 0`) must use `&= 0xFFFFFFFFLL`, never
+  a full-value assignment to `0`** - only a genuine full chip-reset
+  (matching a real `Number_Of_Tiks.Re := 0` in the Pascal source) may
+  zero the whole field.
+- The accumulation itself (`ay_synthesizer_ay`: `tmp := number_of_tiks +
+  (current_tact - previous_tact) * frq_ay_by_frq_z80`, committing
+  `previous_tact` forward only when `tmp`'s high 32 bits are nonzero)
+  must remain call-partition-independent: feeding the same total
+  elapsed cycle delta through one call or many small calls must produce
+  the same final accumulator state and the same total emitted frames.
+  The standalone `synth_harness.c`-style test (feed a fixed cycle total
+  through one_call/step1/step1000/production-cadence partitions, compare
+  results) is the fastest way to catch a regression in this property.
+- `frq_ay_by_frq_z80` (the CPU-cycle-to-AY-tick ratio) is confirmed an
+  exact power-of-2 relationship (134,217,728) with no rounding
+  ambiguity for this project's fixed clock constants - do not introduce
+  floating-point imprecision into this specific constant's computation.
+
+**A real measurement pitfall, found and fixed in this investigation:
+always match render FRAME COUNT, not just duration in seconds, when
+comparing this port against `ay_emul`'s oracle harness.**
+`OracleHarness.pas`'s `RunSNDHWAVExportTest` renders a hardcoded
+`NumBuffers * BufferLen = 2813 * 512 = 1,440,256` frames, always - not
+exactly `30 * SampleRate`. Every earlier capture in this investigation
+compared that against this port's `ay_player --seconds=30`
+(`= 1,440,000` frames exactly), 256 frames short. That mismatch alone
+was responsible for roughly two-thirds of a previously-reported "Timer
+A fires 98 too many times" figure and all of a previously-reported
+"VBL fires 2 too few times" figure - both artifacts vanished (VBL
+became an exact match; Timer A's residual dropped from 98 to 33
+events) once the port was driven with `--frames=1440256` to match the
+oracle's actual render length. **When comparing against the oracle,
+always drive this port to the SAME exact frame count the Pascal
+harness renders, not the same nominal duration in seconds** - the two
+are not always equal, and the difference is large enough to look like
+a real timing defect if missed.
+
+**The remaining, much smaller residual (30s matched-frame render):
+cycle count -730 vs the oracle (240,042,376 vs 240,043,106); Timer A
+assert count -33 (110,439 vs 110,472); Timer D assert count -1 (5,361
+vs 5,362); Timer B and VBL are exact matches.** This was traced to a
+specific, non-random signature, not left as unexplained "quantization
+noise": partitioning Timer A's activity into its 74 restart epochs
+(matching the oracle's own 74 exactly) shows an almost universally
+consistent exactly-(-1)-expiration-per-epoch pattern across the back
+half of the render (roughly 35 of 74 epochs), correlated with this
+port's restart-epoch START times running a small, bounded, non-growing
+42-84 cycles ahead of the oracle's throughout that same stretch.
+Timer D's own single missing event sits at the same kind of boundary -
+both engines' Timer D activity stops permanently around cycle 123.19M
+(partway through the render), and the missing event is the last one in
+that shared cutoff window. The demonstrated mechanism: a small residual
+phase lag between the two engines (comparable in magnitude to the
+overall -730-cycle figure) occasionally pushes a timer's STOP register
+write to the opposite side of a ~663-cycle period boundary from where
+the oracle's equivalent write lands, dropping exactly the final
+expiration of that epoch on this port's side. **This was not root-
+caused to a specific CPU instruction or exception class within this
+investigation** - the mechanism (period-boundary-crossing at a
+program-driven STOP write, given a small non-growing residual phase
+lag) is established and evidence-backed, but the source of that
+remaining tens-of-cycles lag itself was not pinned down further,
+consistent with this project's rule against broad CPU-timing changes
+without an identified instruction-level cause. Anyone resuming this
+should build the full dual-domain CPU-execution/event trace this
+investigation specified but did not complete, to locate the exact
+instruction or ordering difference responsible for the residual lag.
+
+**Where the phase lag is confirmed to originate, and why it likely
+stops here.** VBL itself shows zero cumulative drift right up to the
+last VBL before Timer A's very first restart (both engines land on the
+exact same cycle, 56,000,000, after 1,392 independent VBL periods) -
+proving the residual 42-84-cycle lag is not inherited from general
+clock drift, but is newly introduced somewhere in the short (~8,000-
+cycle) stretch of play-routine code between that VBL and the Timer A
+control-register writes. Pinning it to a specific instruction was
+attempted but blocked by a real tooling gap: this project's single-step
+diagnostics (both the C11 scratch tool and `OracleHarness.pas`'s
+`sndh_singlestep` scenario) drive normally (real interrupts processed)
+only until reaching a requested start cycle, then switch to raw
+single-stepping with **no further interrupt processing** - which fails
+across a sleep/wake boundary like this one (the CPU is often still
+idling at STOP when the switch happens, and raw stepping can't process
+the VBL/MFP interrupt that would wake it). A reliable comparison here
+needs a third single-step mode - interrupt-preserving single-stepping -
+that doesn't exist yet. Given the residual's magnitude (42-84 cycles,
+1-3 instructions' worth) matches the same character as MIG-0053's
+already-accepted Musashi-vs-Starscream opcode-cost differences, and
+this project's standing policy (above) is to never patch Musashi's
+cycle tables regardless of what's found, completing that trace would
+most likely confirm rather than change the outcome - lowering the
+priority of building the missing tooling relative to documenting this
+clearly for whoever picks it up next.
+
 ### 7.2 Decompression — small, low-risk win
 
 `lh5.pas` (1,070 lines, self-contained LZH/LHA decoder, §4.5) could be
@@ -756,13 +1178,18 @@ leave as an assumption:
 - **Not permitted, under any circumstance:** changing what `Z80.pas`,
   `AY.pas`, `Players.pas`, or any other original code path *computes*, in
   order to make it agree with the C11 port. If a differential test reveals
-  a mismatch, the presumption is that the C11 port has a bug (or, per §7's
-  policy discussion elsewhere in this document, that a deliberate,
-  documented, and separately-justified fidelity improvement was made and
-  recorded as migration debt) — never that the original Pascal behavior
-  should be edited to close the gap. Doing so would silently destroy the
-  oracle's value for every future comparison, and defeats the entire
-  purpose of differential testing.
+  a mismatch, the presumption is that the C11 port has a bug — with one
+  narrow, explicitly-decided exception: raw CPU core timing (§7.1.1),
+  where superzazu/z80 and Musashi are trusted over Z80.pas's/Starscream's
+  own cycle accounting when they disagree on a standard, documented
+  timing value. That exception changes which side of the C11 port is
+  presumed correct (the C library, not a from-scratch reproduction of
+  the original's number) — it never means editing the Pascal submodule
+  itself to match. Outside that one case, every mismatch gets recorded as
+  migration debt and investigated, never resolved by editing the
+  original Pascal behavior to close the gap. Doing so would silently
+  destroy the oracle's value for every future comparison, and defeats
+  the entire purpose of differential testing.
 
 ### 8.2 Keep C11 source files under 600 lines — split by semantic boundary, not arbitrarily
 

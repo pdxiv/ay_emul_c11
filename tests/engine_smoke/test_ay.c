@@ -149,12 +149,130 @@ static void test_8bit_output_is_audible(void) {
          e.buf_len);
 }
 
+/* MIG-0056: regression test for ay_synthesizer_ay's tick-accumulator
+ * partition-independence invariant. AY.pas:708/769/854/901's
+ * `Number_Of_Tiks.Hi := 0` clears only the whole-tick count in the
+ * packed variant record, preserving the fractional remainder in .Lo -
+ * a bug where this port instead zeroed the entire 64-bit value
+ * (`e->number_of_tiks = 0`) was call-partition-dependent: the SAME
+ * total elapsed cycles, split into realistic per-call granularity
+ * instead of one huge call, silently lost a fractional remainder on
+ * nearly every call and needed measurably more total cycles to reach a
+ * fixed emitted-frame count. Feeds a fixed 30s-at-8MHz cycle total
+ * through five different call partitions and asserts they all produce
+ * identical results - this MUST hold for any correct implementation of
+ * a monotonic linear tick accumulator, independent of call granularity. */
+static void setup_partition_test(ay_engine* e) {
+  memset(e, 0, sizeof(*e));
+  ay_engine_init(e);
+  e->number_of_channels = 2;
+  e->sample_bits = 16;
+  /* settings.pas/MainWin.pas-derived constants (already validated
+   * elsewhere, MIG-0013/0014/0015): SampleRate=48000, AyFreq=2000000,
+   * MC68000Freq=8000000. */
+  e->delay_in_tiks = (uint32_t)(8192.0 / 48000.0 * 2000000.0 + 0.5);
+  e->tik_re = e->delay_in_tiks;
+  e->frq_ay_by_frq_z80 =
+      (int64_t)(2000000.0 / 8000000.0 / 8.0 * 4294967296.0 + 0.5);
+  ay_engine_calculate_level_tables(e);
+}
+
+static long long run_partition_test(ay_engine* e, int64_t target_cycles,
+                                     int64_t step) {
+  int16_t buf[512 * 2];
+  long long total_frames = 0;
+  int64_t tact = 0;
+
+  e->buf = buf;
+  e->buffer_length = 512;
+  e->buf_len = 0;
+
+  while (tact < target_cycles) {
+    tact += step;
+    if (tact > target_cycles) tact = target_cycles;
+    ay_synthesizer_ay(e, tact);
+    while (e->buf_len >= e->buffer_length) {
+      total_frames += e->buf_len;
+      e->buf_len = 0;
+      if (e->int_flag) {
+        ay_synthesizer_ay(e, tact); /* resume, no new ticks added */
+      } else {
+        break;
+      }
+    }
+  }
+  total_frames += e->buf_len;
+  return total_frames;
+}
+
+static void test_tick_accumulator_partition_independence(void) {
+  int64_t target = (int64_t)(30.0 * 8000000.0); /* 30s at 8MHz */
+  ay_engine e;
+  long long results[5];
+  int64_t steps[5] = {target, 1, 1000, 7, 700}; /* last one alternates below */
+
+  setup_partition_test(&e);
+  results[0] = run_partition_test(&e, target, steps[0]); /* one huge call */
+
+  setup_partition_test(&e);
+  results[1] = run_partition_test(&e, target, steps[1]); /* 1-cycle steps */
+
+  setup_partition_test(&e);
+  results[2] = run_partition_test(&e, target, steps[2]); /* 1000-cycle steps */
+
+  setup_partition_test(&e);
+  results[3] = run_partition_test(&e, target, steps[3]); /* 7-cycle steps */
+
+  /* Alternating small/large steps, approximating real atari_emulate_step
+   * cadence (the case that showed the largest divergence before the fix -
+   * 59,572 fewer frames than the one-huge-call baseline). */
+  {
+    setup_partition_test(&e);
+    int16_t buf[512 * 2];
+    e.buf = buf;
+    e.buffer_length = 512;
+    e.buf_len = 0;
+    long long total = 0;
+    int64_t tact = 0;
+    int toggle = 0;
+    while (tact < target) {
+      int64_t step = (toggle++ & 1) ? 1 : 700;
+      tact += step;
+      if (tact > target) tact = target;
+      ay_synthesizer_ay(&e, tact);
+      while (e.buf_len >= e.buffer_length) {
+        total += e.buf_len;
+        e.buf_len = 0;
+        if (e.int_flag) {
+          ay_synthesizer_ay(&e, tact);
+        } else {
+          break;
+        }
+      }
+    }
+    total += e.buf_len;
+    results[4] = total;
+  }
+
+  assert(results[0] > 0);
+  assert(results[1] == results[0]);
+  assert(results[2] == results[0]);
+  assert(results[3] == results[0]);
+  assert(results[4] == results[0]);
+
+  printf("test_tick_accumulator_partition_independence: OK (%lld frames, "
+         "identical across one-call/1-cycle/1000-cycle/7-cycle/"
+         "alternating-cadence partitions)\n",
+         results[0]);
+}
+
 int main(void) {
   test_register_masking();
   test_envelope_dispatch();
   test_noise_val_is_boolean_gate();
   test_end_to_end_tone_is_audible();
   test_8bit_output_is_audible();
+  test_tick_accumulator_partition_independence();
   printf("All ay smoke tests passed.\n");
   return 0;
 }

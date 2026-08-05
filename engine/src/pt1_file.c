@@ -156,8 +156,19 @@ static void get_registers(pt1_file* f, pt1_channel* chan, uint8_t* temp_mixer) {
     /* Players.pas:11246-11247: `j := Note + Index[...]` - Index is an
      * unsigned byte array (ModTypes variant 0), no signed cast in the
      * source, so this is a plain unsigned add (unlike `shortint(b)`
-     * below, which IS explicitly cast signed in the original). */
-    int j = chan->note + d[chan->ornament_pointer + chan->position_in_sample];
+     * below, which IS explicitly cast signed in the original). BUT `j`
+     * itself is declared `var j, b: byte` (Players.pas:11240) - an 8-bit
+     * Pascal variable, and with range checking off (confirmed: no {$R+}
+     * anywhere, no -Cr in the build), `Note + Index[...]` silently wraps
+     * modulo 256 when it exceeds 255, BEFORE the `if j > 95 then j := 95`
+     * clamp below ever sees it. Widening to a plain C `int` and clamping
+     * the unwrapped sum (as this used to do) gives a completely different
+     * - and wrong - note-table index whenever the raw sum exceeds 255:
+     * e.g. note=41 + ornament byte=251 -> raw sum 292, Pascal wraps to 36
+     * (a valid, small table index), while an unwrapped clamp forces 95
+     * (the table's last, near-silent entry) instead. Mask to a byte
+     * FIRST to replicate Pascal's own variable width exactly. */
+    int j = (chan->note + d[chan->ornament_pointer + chan->position_in_sample]) & 0xFF;
     if (j > 95) j = 95;
     uint8_t b = d[chan->sample_pointer + (uint32_t)chan->position_in_sample * 3];
     int ton = (((int)b << 4) & 0xF00) +

@@ -149,6 +149,53 @@ static void run_immediate(const char* out_path) {
   dump_ay_registers(&chip, out_path);
 }
 
+static uint8_t on_read(void* ud, uint8_t reg) {
+  return ((ay_chip*)ud)->reg[reg];
+}
+
+/* Closes MIG-0006b's remaining "IN A,(n) has no test" gap - mirrors
+ * ay_emul/OracleHarness.pas's RunImmediateInTest exactly: select register
+ * 9 and write $2A to it via the BC-indirect form, then read it back via
+ * `LD A,$FF; IN A,($FD)` (immediate form, port = (A<<8)|n = $FFFD, the
+ * real AY read/select port), dumping the 14 AY registers plus the
+ * resulting A value. */
+static void run_immediate_in(const char* out_path) {
+  z80_bus bus;
+  ay_chip chip;
+  memset(&chip, 0, sizeof(chip));
+  ay_chip_reset(&chip, 1);
+  z80_bus_init(&bus, 100000);
+  bus.machine = Z80_BUS_MACHINE_ZX;
+
+  recorded_write rw;
+  memset(&rw, 0, sizeof(rw));
+  bus.ay_write_userdata = &rw;
+  bus.on_ay_write = on_write;
+  bus.ay_read_userdata = &chip;
+  bus.on_ay_read = on_read;
+
+  int pc = 0;
+  pc = emit_out_c_a(bus.ram, pc, 0xFFFD, 9);   /* BC-indirect: select reg 9 */
+  pc = emit_out_c_a(bus.ram, pc, 0xBFFD, 0x2A); /* BC-indirect: write $2A */
+  bus.ram[pc++] = 0x3E; bus.ram[pc++] = 0xFF; /* LD A,$FF */
+  bus.ram[pc++] = 0xDB; bus.ram[pc++] = 0xFD; /* IN A,($FD) -> port $FFFD */
+  bus.ram[pc] = 0x76;
+
+  int i;
+  for (i = 0; i < 100 && !bus.cpu.halted; i++) {
+    z80_bus_step(&bus);
+    if (rw.count == 1) {
+      ay_chip_set_ay_register(&chip, rw.reg, rw.data);
+      rw.count = 2;
+    }
+  }
+
+  FILE* f = fopen(out_path, "w");
+  for (i = 0; i < 14; i++) fprintf(f, "%d\n", chip.reg[i]);
+  fprintf(f, "%d\n", bus.cpu.a);
+  fclose(f);
+}
+
 static void run_pcm(const char* out_path) {
   ay_engine e;
   int16_t buf[512 * 2];
@@ -972,6 +1019,7 @@ int main(int argc, char** argv) {
   if (strcmp(scenario, "zx") == 0) run_zx(out_path);
   else if (strcmp(scenario, "cpc") == 0) run_cpc(out_path);
   else if (strcmp(scenario, "immediate") == 0) run_immediate(out_path);
+  else if (strcmp(scenario, "immediate_in") == 0) run_immediate_in(out_path);
   else if (strcmp(scenario, "pcm") == 0) run_pcm(out_path);
   else if (strcmp(scenario, "pcm_filtered") == 0) run_pcm_filtered(out_path);
   else if (strcmp(scenario, "pcm8") == 0) run_pcm8(out_path);

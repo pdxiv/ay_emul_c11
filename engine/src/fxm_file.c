@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "ay_engine/trace_log.h"
+
 /* Players.pas:1000-1011, FXM_Table. */
 static const uint16_t FXM_TABLE[84] = {
     0x0FBF, 0x0EDC, 0x0E07, 0x0D3D, 0x0C7F, 0x0BCC, 0x0B22, 0x0A82, 0x09EB,
@@ -291,6 +293,11 @@ static void fxm_get_registers(fxm_file* f) {
                              (f->chan_c.fxm_mixer << 2)) &
                             0x3F);
   ay_chip_set_ay_register_fast(&f->ay.chip, 7, mixer);
+
+  trace_log_ay(f->global_tick_counter, "fxm_a", ton_a, f->chan_a.amplitude);
+  trace_log_ay(f->global_tick_counter, "fxm_b", ton_b, f->chan_b.amplitude);
+  trace_log_ay(f->global_tick_counter, "fxm_c", ton_c, f->chan_c.amplitude);
+  trace_log_ay(f->global_tick_counter, "fxm_mixer", mixer, 0);
 
   f->global_tick_counter++;
 }
