@@ -32,6 +32,26 @@ static void wr16(uint8_t* d, uint32_t addr, uint16_t v) {
 
 static uint8_t rb(const uint8_t* d, uint32_t addr) { return d[addr & 0xFFFF]; }
 
+/* Copies a fixed-width, space-padded (not NUL-terminated) field, then
+ * trims leading/trailing bytes <= ' ' - see gtr_file.c's identical
+ * helper for the full rationale (duplicated per this project's
+ * per-file convention). */
+static void copy_fixed_field(const uint8_t* src, size_t src_size,
+                              size_t field_offset, size_t field_len,
+                              char* out, size_t cap) {
+  out[0] = '\0';
+  if (cap == 0 || field_offset + field_len > src_size) return;
+  size_t n = field_len;
+  if (n >= cap) n = cap - 1;
+  memcpy(out, src + field_offset, n);
+  out[n] = '\0';
+  while (n > 0 && (unsigned char)out[n - 1] <= ' ') n--;
+  out[n] = '\0';
+  size_t start = 0;
+  while (start < n && (unsigned char)out[start] <= ' ') start++;
+  if (start > 0) memmove(out, out + start, n - start + 1);
+}
+
 /* ModTypes variant 2 (Players.pas:116-119, the ASC1 layout every FT.ASC/
  * FT.ASC0 file is normalized to): ASC1_Delay@0 ASC1_LoopingPosition@1
  * ASC1_PatternsPointers@2 (word) ASC1_SamplesPointers@4 (word)
@@ -68,6 +88,24 @@ asc_file_status asc_file_load(asc_file* f, const uint8_t* data, size_t size,
   f->samples_pointer = rd16(f->data, 4);
   f->ornaments_pointer = rd16(f->data, 6);
   f->number_of_positions = f->data[8];
+
+  /* Players.pas: "else if FType = FT.ASC"/"FT.ASC0" (7436-7473). Both
+   * branches reduce to the SAME check/offsets once is_asc0's own
+   * normalization above has already run: ASC1's check is
+   * `PatternsPointers - NumberOfPositions = 72`; ASC0's is `= 71`
+   * against its own PRE-shift PatternsPointers value - but this port's
+   * ASC0 path already added +1 to patterns_pointer during
+   * normalization, so `(asc0_patterns_pointer_raw + 1) -
+   * number_of_positions = 71 + 1 = 72`, the exact same check ASC1 uses
+   * - one shared check/offset pair covers both formats correctly. */
+  if (f->patterns_pointer >= f->number_of_positions &&
+      (uint32_t)(f->patterns_pointer - f->number_of_positions) == 72 &&
+      f->patterns_pointer >= 44) {
+    copy_fixed_field(f->data, size, (size_t)f->patterns_pointer - 44, 20,
+                      f->title, sizeof(f->title));
+    copy_fixed_field(f->data, size, (size_t)f->patterns_pointer - 20, 20,
+                      f->author, sizeof(f->author));
+  }
 
   ay_engine_init(&f->ay);
   f->ay.delay_in_tiks =

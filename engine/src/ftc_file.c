@@ -64,6 +64,26 @@ static uint16_t rd16(const uint8_t* d, uint32_t addr) {
 
 static uint8_t rb(const uint8_t* d, uint32_t addr) { return d[addr & 0xFFFF]; }
 
+/* Copies a fixed-width, space-padded (not NUL-terminated) field, then
+ * trims leading/trailing bytes <= ' ' - see gtr_file.c's identical helper for
+ * the full rationale (duplicated per this project's per-file
+ * convention). */
+static void copy_fixed_field(const uint8_t* src, size_t src_size,
+                              size_t field_offset, size_t field_len,
+                              char* out, size_t cap) {
+  out[0] = '\0';
+  if (cap == 0 || field_offset + field_len > src_size) return;
+  size_t n = field_len;
+  if (n >= cap) n = cap - 1;
+  memcpy(out, src + field_offset, n);
+  out[n] = '\0';
+  while (n > 0 && (unsigned char)out[n - 1] <= ' ') n--;
+  out[n] = '\0';
+  size_t start = 0;
+  while (start < n && (unsigned char)out[start] <= ' ') start++;
+  if (start > 0) memmove(out, out + start, n - start + 1);
+}
+
 /* Players.pas:10847-10858, GetNoteFreq. */
 static int get_note_freq(const ftc_file* f, uint8_t j) {
   if (f->version < 7) return PT3_NOTE_TABLE_ST[j];
@@ -87,6 +107,9 @@ ftc_file_status ftc_file_load(ftc_file* f, const uint8_t* data, size_t size,
   if (size < 214) return FTC_FILE_ERR_TRUNCATED;
   if (size > 65536) size = 65536; /* Players.pas:2253: clamped to 65536 */
   memcpy(f->data, data, size);
+
+  /* Players.pas: "else if FType = FT.FTC" (7372-7380). */
+  copy_fixed_field(f->data, size, 8, 42, f->title, sizeof(f->title));
 
   f->delay = f->data[69];
   f->patterns_pointer = rd16(f->data, 75);

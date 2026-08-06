@@ -1,0 +1,594 @@
+/* Must precede every #include (even our own headers, which transitively
+ * pull in <stdint.h> -> <features.h> and lock in glibc's own lower
+ * default first otherwise, triggering a harmless but noisy
+ * "_POSIX_C_SOURCE redefined" warning). */
+#define _POSIX_C_SOURCE 200809L /* for strcasecmp under strict -std=c11 */
+#include "gui/playlist_win.h"
+
+#include <gdk/gdkkeysyms.h>
+#include <stdint.h>
+#include <string.h>
+#include <strings.h>
+
+#include "itemedit.h"
+#include "progbox.h"
+
+enum { COL_DISPLAY = 0, COL_INDEX, NUM_COLS };
+
+typedef struct scan_progress_ctx {
+  gui_prbox* pb;
+} scan_progress_ctx;
+
+static bool on_scan_progress(int files_examined, void* userdata) {
+  (void)files_examined;
+  scan_progress_ctx* ctx = (scan_progress_ctx*)userdata;
+  gui_prbox_pulse(ctx->pb);
+  return !ctx->pb->aborted;
+}
+
+static void refresh_view(gui_playlist_win* w) {
+  gtk_list_store_clear(w->store);
+  for (int i = 0; i < w->model.count; i++) {
+    GtkTreeIter iter;
+    gtk_list_store_append(w->store, &iter);
+    gtk_list_store_set(w->store, &iter, COL_DISPLAY,
+                        w->model.items[i].display, COL_INDEX, i, -1);
+  }
+}
+
+static void fire_play(gui_playlist_win* w, int index) {
+  if (index < 0 || index >= w->model.count) return;
+  w->model.current = index;
+  if (w->on_play) {
+    w->on_play(w->model.items[index].path, w->model.items[index].song_index,
+               &w->model.items[index].overrides, w->userdata);
+  }
+}
+
+static void on_row_activated(GtkTreeView* tree_view, GtkTreePath* path,
+                              GtkTreeViewColumn* column, gpointer data) {
+  (void)tree_view;
+  (void)column;
+  gui_playlist_win* w = (gui_playlist_win*)data;
+  gint* indices = gtk_tree_path_get_indices(path);
+  if (indices) fire_play(w, indices[0]);
+}
+
+static void on_add_files_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win_add_files_dialog((gui_playlist_win*)data);
+}
+
+static void on_add_folder_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win_add_folder_dialog((gui_playlist_win*)data);
+}
+
+static void on_clear_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win_clear((gui_playlist_win*)data);
+}
+
+static void on_remove_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win_remove_selected((gui_playlist_win*)data);
+}
+
+static gboolean on_tree_key_press(GtkWidget* widget, GdkEventKey* event,
+                                   gpointer data) {
+  (void)widget;
+  if (event->keyval == GDK_Delete || event->keyval == GDK_BackSpace) {
+    gui_playlist_win_remove_selected((gui_playlist_win*)data);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static void on_find_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win_show_find_dialog((gui_playlist_win*)data);
+}
+
+/* PlayList.pas: SBSaveClick (~2914-2951) - a GtkFileChooserDialog SAVE
+ * with a filename-extension filter choosing .ayl vs .m3u, same as the
+ * original's own FilterIndex (1=AYL, 2=M3U) SaveDialog1 - here decided
+ * from which of the two filters is active when the user confirms,
+ * appending the matching extension if the typed filename doesn't
+ * already end in it (matching the original's own `if FName <> '.ayl'
+ * then FName := ... + '.ayl'` fallback). */
+static void on_save_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win* w = (gui_playlist_win*)data;
+  GtkWidget* dlg = gtk_file_chooser_dialog_new(
+      "Save playlist", GTK_WINDOW(w->window), GTK_FILE_CHOOSER_ACTION_SAVE,
+      GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL, GTK_STOCK_SAVE,
+      GTK_RESPONSE_ACCEPT, NULL);
+  gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
+
+  GtkFileFilter* filter_ayl = gtk_file_filter_new();
+  gtk_file_filter_set_name(filter_ayl, "AY Emulator Playlist (*.ayl)");
+  gtk_file_filter_add_pattern(filter_ayl, "*.ayl");
+  gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), filter_ayl);
+
+  GtkFileFilter* filter_m3u = gtk_file_filter_new();
+  gtk_file_filter_set_name(filter_m3u, "M3U Playlist (*.m3u)");
+  gtk_file_filter_add_pattern(filter_m3u, "*.m3u");
+  gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), filter_m3u);
+
+  if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+    char* fname = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+    GtkFileFilter* active = gtk_file_chooser_get_filter(GTK_FILE_CHOOSER(dlg));
+    bool want_m3u = (active == filter_m3u);
+    const char* want_ext = want_m3u ? ".m3u" : ".ayl";
+    const char* dot = strrchr(fname, '.');
+    char final_name[1024];
+    if (dot && strcasecmp(dot, want_ext) == 0) {
+      strncpy(final_name, fname, sizeof(final_name) - 1);
+      final_name[sizeof(final_name) - 1] = '\0';
+    } else {
+      snprintf(final_name, sizeof(final_name), "%s%s", fname, want_ext);
+    }
+    bool ok = want_m3u ? gui_playlist_save_m3u(&w->model, final_name)
+                        : gui_playlist_save_ayl(&w->model, final_name);
+    if (!ok) {
+      GtkWidget* msg = gtk_message_dialog_new(
+          GTK_WINDOW(w->window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+          GTK_BUTTONS_OK, "Could not save playlist to '%s'", final_name);
+      gtk_dialog_run(GTK_DIALOG(msg));
+      gtk_widget_destroy(msg);
+    }
+    g_free(fname);
+  }
+  gtk_widget_destroy(dlg);
+}
+
+/* PlayList.pas: Deduplicate1Click - reports the count via a message
+ * dialog (the original just redraws silently, but this port has no
+ * always-visible status bar to put that feedback in, so a small
+ * message dialog stands in for it - shown only when something was
+ * actually removed, to stay out of the way otherwise). */
+static void on_dedup_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win* w = (gui_playlist_win*)data;
+  int removed = gui_playlist_dedup(&w->model);
+  refresh_view(w);
+  if (removed > 0) {
+    GtkWidget* msg = gtk_message_dialog_new(
+        GTK_WINDOW(w->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+        GTK_BUTTONS_OK, "Removed %d duplicate entr%s", removed,
+        removed == 1 ? "y" : "ies");
+    gtk_dialog_run(GTK_DIALOG(msg));
+    gtk_widget_destroy(msg);
+  }
+}
+
+/* PlayList.pas: PopupMenu2's RandomSort/ByauthorSort/BytitleSort/
+ * ByfilenameSort/Byfiletype1 menu items (MIG-0089) - a GtkMenu popped
+ * up from a "Sort" button rather than the original's right-click
+ * SBTools popup, same rationale as every other hand-built window here
+ * (idiomatic GTK2, not a literal `.lfm`/menu-structure transcription). */
+static void on_sort_mode_activate(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win* w = (gui_playlist_win*)data;
+  gui_playlist_sort_mode mode =
+      (gui_playlist_sort_mode)(intptr_t)g_object_get_data(
+          G_OBJECT(widget), "sort-mode");
+  gui_playlist_sort(&w->model, mode);
+  refresh_view(w);
+}
+
+static void on_sort_clicked(GtkWidget* widget, gpointer data) {
+  gui_playlist_win* w = (gui_playlist_win*)data;
+  GtkWidget* menu = gtk_menu_new();
+  static const struct {
+    const char* label;
+    gui_playlist_sort_mode mode;
+  } items[] = {
+      {"Sort by author", GUI_PLAYLIST_SORT_AUTHOR},
+      {"Sort by title", GUI_PLAYLIST_SORT_TITLE},
+      {"Sort by file name", GUI_PLAYLIST_SORT_FILENAME},
+      {"Sort by file type", GUI_PLAYLIST_SORT_FILETYPE},
+      {"Sort randomly", GUI_PLAYLIST_SORT_RANDOM},
+  };
+  for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
+    GtkWidget* item = gtk_menu_item_new_with_label(items[i].label);
+    g_object_set_data(G_OBJECT(item), "sort-mode",
+                       (gpointer)(intptr_t)items[i].mode);
+    g_signal_connect(item, "activate", G_CALLBACK(on_sort_mode_activate), w);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  }
+  gtk_widget_show_all(menu);
+  gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, 0,
+                 gtk_get_current_event_time());
+  (void)widget;
+}
+
+/* PlayList.pas: MenuItemAdjustingClick (~1009) - opens ItemEdit.pas on
+ * the currently-selected item (MIG-0088). No-op if nothing is
+ * selected, matching the original's own "if LastSelected < 0 then
+ * exit"-style guard on every other selection-scoped popup command
+ * here (see gui_playlist_win_remove_selected). */
+static void on_adjust_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  gui_playlist_win* w = (gui_playlist_win*)data;
+  GtkTreeSelection* sel =
+      gtk_tree_view_get_selection(GTK_TREE_VIEW(w->tree_view));
+  GtkTreeModel* model;
+  GtkTreeIter iter;
+  if (!gtk_tree_selection_get_selected(sel, &model, &iter)) return;
+  gint index = -1;
+  gtk_tree_model_get(model, &iter, COL_INDEX, &index, -1);
+  if (index < 0 || index >= w->model.count) return;
+  gui_itemedit_show(GTK_WINDOW(w->window), &w->model.items[index]);
+  refresh_view(w);
+}
+
+static void select_and_scroll(gui_playlist_win* w, int index) {
+  GtkTreePath* path = gtk_tree_path_new_from_indices(index, -1);
+  GtkTreeSelection* sel =
+      gtk_tree_view_get_selection(GTK_TREE_VIEW(w->tree_view));
+  gtk_tree_selection_select_path(sel, path);
+  gtk_tree_view_scroll_to_cell(GTK_TREE_VIEW(w->tree_view), path, NULL,
+                                TRUE, 0.5, 0.0);
+  gtk_tree_path_free(path);
+}
+
+void gui_playlist_win_create(gui_playlist_win* w, GtkWindow* parent,
+                              gui_playlist_play_cb on_play, void* userdata) {
+  memset(w, 0, sizeof(*w));
+  gui_playlist_init(&w->model);
+  w->on_play = on_play;
+  w->userdata = userdata;
+  w->find_last_index = -1;
+
+  w->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  gtk_window_set_title(GTK_WINDOW(w->window), "Playlist");
+  gtk_window_set_default_size(GTK_WINDOW(w->window), 360, 400);
+  if (parent) gtk_window_set_transient_for(GTK_WINDOW(w->window), parent);
+  g_signal_connect(w->window, "delete-event",
+                    G_CALLBACK(gtk_widget_hide_on_delete), NULL);
+
+  GtkWidget* vbox = gtk_vbox_new(FALSE, 4);
+  gtk_container_set_border_width(GTK_CONTAINER(vbox), 4);
+  gtk_container_add(GTK_CONTAINER(w->window), vbox);
+
+  GtkWidget* scroll = gtk_scrolled_window_new(NULL, NULL);
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                  GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+  gtk_box_pack_start(GTK_BOX(vbox), scroll, TRUE, TRUE, 0);
+
+  w->store = gtk_list_store_new(NUM_COLS, G_TYPE_STRING, G_TYPE_INT);
+  w->tree_view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(w->store));
+  gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(w->tree_view), FALSE);
+  GtkCellRenderer* renderer = gtk_cell_renderer_text_new();
+  GtkTreeViewColumn* col = gtk_tree_view_column_new_with_attributes(
+      "Track", renderer, "text", COL_DISPLAY, NULL);
+  gtk_tree_view_append_column(GTK_TREE_VIEW(w->tree_view), col);
+  g_signal_connect(w->tree_view, "row-activated",
+                    G_CALLBACK(on_row_activated), w);
+  g_signal_connect(w->tree_view, "key-press-event",
+                    G_CALLBACK(on_tree_key_press), w);
+  gtk_container_add(GTK_CONTAINER(scroll), w->tree_view);
+
+  GtkWidget* hbox = gtk_hbox_new(TRUE, 4);
+  gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 0);
+
+  GtkWidget* add_files_btn = gtk_button_new_with_label("Add Files");
+  g_signal_connect(add_files_btn, "clicked",
+                    G_CALLBACK(on_add_files_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), add_files_btn, TRUE, TRUE, 0);
+
+  GtkWidget* add_folder_btn = gtk_button_new_with_label("Add Folder");
+  g_signal_connect(add_folder_btn, "clicked",
+                    G_CALLBACK(on_add_folder_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), add_folder_btn, TRUE, TRUE, 0);
+
+  GtkWidget* remove_btn = gtk_button_new_with_label("Remove");
+  g_signal_connect(remove_btn, "clicked", G_CALLBACK(on_remove_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), remove_btn, TRUE, TRUE, 0);
+
+  GtkWidget* clear_btn = gtk_button_new_with_label("Clear");
+  g_signal_connect(clear_btn, "clicked", G_CALLBACK(on_clear_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), clear_btn, TRUE, TRUE, 0);
+
+  GtkWidget* find_btn = gtk_button_new_with_label("Find");
+  g_signal_connect(find_btn, "clicked", G_CALLBACK(on_find_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), find_btn, TRUE, TRUE, 0);
+
+  GtkWidget* adjust_btn = gtk_button_new_with_label("Adjust...");
+  g_signal_connect(adjust_btn, "clicked", G_CALLBACK(on_adjust_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), adjust_btn, TRUE, TRUE, 0);
+
+  GtkWidget* sort_btn = gtk_button_new_with_label("Sort...");
+  g_signal_connect(sort_btn, "clicked", G_CALLBACK(on_sort_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), sort_btn, TRUE, TRUE, 0);
+
+  GtkWidget* dedup_btn = gtk_button_new_with_label("Dedup");
+  g_signal_connect(dedup_btn, "clicked", G_CALLBACK(on_dedup_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), dedup_btn, TRUE, TRUE, 0);
+
+  GtkWidget* save_btn = gtk_button_new_with_label("Save...");
+  g_signal_connect(save_btn, "clicked", G_CALLBACK(on_save_clicked), w);
+  gtk_box_pack_start(GTK_BOX(hbox), save_btn, TRUE, TRUE, 0);
+}
+
+void gui_playlist_win_toggle_visible(gui_playlist_win* w) {
+  if (gtk_widget_get_visible(w->window)) {
+    gtk_widget_hide(w->window);
+  } else {
+    gtk_widget_show_all(w->window);
+  }
+}
+
+/* PlayList.pas: Add_File's extension dispatch (~1780-1792) - a chosen
+ * path ending in .ayl/.m3u/.m3u8 is a PLAYLIST file (its own entries
+ * get added, via gui_playlist_load_ayl/load_m3u), not itself a
+ * playable chiptune, matching the original's own FTS='AYL'/FTS='M3U'
+ * branches (see gui_playlist_load_ayl/gui_playlist_load_m3u's own
+ * header comments for what's ported of each - .cue is NOT dispatched
+ * here, see migration_debt.yaml). Every other extension goes through
+ * the normal real-player-probe add path unchanged. Returns the number
+ * of entries added. */
+static int add_any(gui_playlist* pl, const char* path) {
+  const char* dot = strrchr(path, '.');
+  if (dot) {
+    if (strcasecmp(dot, ".ayl") == 0) return gui_playlist_load_ayl(pl, path);
+    if (strcasecmp(dot, ".m3u") == 0 || strcasecmp(dot, ".m3u8") == 0)
+      return gui_playlist_load_m3u(pl, path);
+  }
+  return gui_playlist_add_file(pl, path);
+}
+
+void gui_playlist_win_replace_with_path(gui_playlist_win* w,
+                                         const char* path) {
+  gui_playlist_clear(&w->model);
+  int added = add_any(&w->model, path);
+  refresh_view(w);
+  if (added > 0) fire_play(w, 0);
+}
+
+void gui_playlist_win_add_path(gui_playlist_win* w, const char* path) {
+  add_any(&w->model, path);
+  refresh_view(w);
+}
+
+void gui_playlist_win_add_files_dialog(gui_playlist_win* w) {
+  GtkWidget* dlg = gtk_file_chooser_dialog_new(
+      "Add files to playlist", GTK_WINDOW(w->window),
+      GTK_FILE_CHOOSER_ACTION_OPEN, GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
+      GTK_STOCK_ADD, GTK_RESPONSE_ACCEPT, NULL);
+  gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dlg), TRUE);
+  if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+    GSList* files = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dlg));
+    for (GSList* it = files; it; it = it->next) {
+      add_any(&w->model, (const char*)it->data);
+      g_free(it->data);
+    }
+    g_slist_free(files);
+    refresh_view(w);
+  }
+  gtk_widget_destroy(dlg);
+}
+
+void gui_playlist_win_add_folder_dialog(gui_playlist_win* w) {
+  GtkWidget* dlg = gtk_file_chooser_dialog_new(
+      "Add folder to playlist", GTK_WINDOW(w->window),
+      GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, GTK_STOCK_CANCEL,
+      GTK_RESPONSE_CANCEL, GTK_STOCK_ADD, GTK_RESPONSE_ACCEPT, NULL);
+
+  /* seldir.pas: CBRecurse ("Recurse into subdirectories" - one of
+   * ChooseDirectory's options, the only one with a direct equivalent in
+   * this port; see gui_playlist_add_directory's own comment for why
+   * the others - do-detect/playlist-inclusion-mode/path-to-name - are
+   * not ported). Defaults checked, matching AddFolderRecurseDirs's
+   * real default. */
+  GtkWidget* recurse_check =
+      gtk_check_button_new_with_label("Recurse into subdirectories");
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(recurse_check), TRUE);
+  gtk_file_chooser_set_extra_widget(GTK_FILE_CHOOSER(dlg), recurse_check);
+  gtk_widget_show(recurse_check);
+
+  if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+    char* dir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+    bool recurse =
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(recurse_check));
+
+    gui_prbox pb;
+    gui_prbox_create(&pb, GTK_WINDOW(w->window), "Searching for tunes...");
+
+    /* on_scan_progress pulses ProgBox and checks its Abort button (see
+     * gui/dialogs/progbox.h) on every file gui_playlist_add_directory
+     * examines. */
+    scan_progress_ctx ctx = {&pb};
+    gui_playlist_add_directory(&w->model, dir, recurse, on_scan_progress,
+                                &ctx);
+
+    gui_prbox_destroy(&pb);
+    g_free(dir);
+    refresh_view(w);
+  }
+  gtk_widget_destroy(dlg);
+}
+
+void gui_playlist_win_clear(gui_playlist_win* w) {
+  gui_playlist_clear(&w->model);
+  refresh_view(w);
+}
+
+void gui_playlist_win_remove_selected(gui_playlist_win* w) {
+  GtkTreeSelection* sel =
+      gtk_tree_view_get_selection(GTK_TREE_VIEW(w->tree_view));
+  GtkTreeModel* model;
+  GtkTreeIter iter;
+  if (!gtk_tree_selection_get_selected(sel, &model, &iter)) return;
+
+  gint index = -1;
+  gtk_tree_model_get(model, &iter, COL_INDEX, &index, -1);
+  gui_playlist_remove(&w->model, index);
+  refresh_view(w);
+}
+
+bool gui_playlist_win_next(gui_playlist_win* w) {
+  if (w->model.current + 1 >= w->model.count) return false;
+  fire_play(w, w->model.current + 1);
+  return true;
+}
+
+bool gui_playlist_win_prev(gui_playlist_win* w) {
+  if (w->model.current <= 0) return false;
+  fire_play(w, w->model.current - 1);
+  return true;
+}
+
+/* FindPLItem.pas: Button1Click (Find Next) - search from LastSelected+1
+ * to the end, then wrap 0..LastSelected if nothing was found forward. */
+static void find_next(gui_playlist_win* w, const char* needle,
+                       gui_playlist_find_mode mode) {
+  int found = gui_playlist_find(&w->model, w->find_last_index + 1, mode,
+                                 needle);
+  if (found < 0 && w->find_last_index >= 0) {
+    int wrapped = gui_playlist_find(&w->model, 0, mode, needle);
+    if (wrapped <= w->find_last_index) found = wrapped;
+  }
+  if (found < 0) {
+    GtkWidget* msg = gtk_message_dialog_new(
+        GTK_WINDOW(w->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+        GTK_BUTTONS_OK, "Search string not found");
+    gtk_dialog_run(GTK_DIALOG(msg));
+    gtk_widget_destroy(msg);
+    return;
+  }
+  w->find_last_index = found;
+  select_and_scroll(w, found);
+}
+
+/* FindPLItem.pas: Button2Click (Find All) - counts and selects every
+ * match; GtkTreeView's single-selection mode means only the last match
+ * ends up visibly selected+scrolled-to (see this function's own header
+ * comment in playlist_win.h for why that's a documented, not silent,
+ * narrowing). */
+static void find_all(gui_playlist_win* w, const char* needle,
+                      gui_playlist_find_mode mode) {
+  int count = 0;
+  int last = -1;
+  for (int i = gui_playlist_find(&w->model, 0, mode, needle); i >= 0;
+       i = gui_playlist_find(&w->model, i + 1, mode, needle)) {
+    count++;
+    last = i;
+  }
+  if (count == 0) {
+    GtkWidget* msg = gtk_message_dialog_new(
+        GTK_WINDOW(w->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+        GTK_BUTTONS_OK, "Search string not found");
+    gtk_dialog_run(GTK_DIALOG(msg));
+    gtk_widget_destroy(msg);
+    return;
+  }
+  w->find_last_index = last;
+  select_and_scroll(w, last);
+  GtkWidget* msg = gtk_message_dialog_new(
+      GTK_WINDOW(w->window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+      GTK_BUTTONS_OK, "%d match%s found", count, count == 1 ? "" : "es");
+  gtk_dialog_run(GTK_DIALOG(msg));
+  gtk_widget_destroy(msg);
+}
+
+typedef struct find_dialog_ctx {
+  gui_playlist_win* w;
+  GtkWidget* entry;
+  GtkWidget* rb_author;
+  GtkWidget* rb_title;
+  GtkWidget* rb_filename;
+} find_dialog_ctx;
+
+static gui_playlist_find_mode selected_find_mode(find_dialog_ctx* ctx) {
+  if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ctx->rb_author)))
+    return GUI_PLAYLIST_FIND_AUTHOR;
+  if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ctx->rb_title)))
+    return GUI_PLAYLIST_FIND_TITLE;
+  if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ctx->rb_filename)))
+    return GUI_PLAYLIST_FIND_FILENAME;
+  return GUI_PLAYLIST_FIND_ANYWHERE;
+}
+
+static void on_find_next_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  find_dialog_ctx* ctx = (find_dialog_ctx*)data;
+  find_next(ctx->w, gtk_entry_get_text(GTK_ENTRY(ctx->entry)),
+            selected_find_mode(ctx));
+}
+
+static void on_find_all_clicked(GtkWidget* widget, gpointer data) {
+  (void)widget;
+  find_dialog_ctx* ctx = (find_dialog_ctx*)data;
+  find_all(ctx->w, gtk_entry_get_text(GTK_ENTRY(ctx->entry)),
+           selected_find_mode(ctx));
+}
+
+void gui_playlist_win_show_find_dialog(gui_playlist_win* w) {
+  GtkWidget* dlg = gtk_dialog_new_with_buttons(
+      "Find playlist item", GTK_WINDOW(w->window),
+      GTK_DIALOG_DESTROY_WITH_PARENT, GTK_STOCK_CLOSE, GTK_RESPONSE_CLOSE,
+      NULL);
+
+  GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+  GtkWidget* vbox = gtk_vbox_new(FALSE, 6);
+  gtk_container_set_border_width(GTK_CONTAINER(vbox), 6);
+  gtk_container_add(GTK_CONTAINER(content), vbox);
+
+  GtkWidget* search_frame = gtk_frame_new("Search string");
+  GtkWidget* entry = gtk_entry_new();
+  GtkWidget* entry_align = gtk_alignment_new(0.5, 0.5, 1.0, 1.0);
+  gtk_alignment_set_padding(GTK_ALIGNMENT(entry_align), 4, 4, 4, 4);
+  gtk_container_add(GTK_CONTAINER(entry_align), entry);
+  gtk_container_add(GTK_CONTAINER(search_frame), entry_align);
+  gtk_box_pack_start(GTK_BOX(vbox), search_frame, FALSE, FALSE, 0);
+
+  /* FindPLItem.pas: FormCreate's RadioGroup1.Items - "Anywhere"/
+   * "Author name"/"Music title"/"File name", in that order (matching
+   * gui_playlist_find_mode's own enum values 0-3). */
+  GtkWidget* area_frame = gtk_frame_new("Search area");
+  GtkWidget* radio_vbox = gtk_vbox_new(TRUE, 0);
+  gtk_container_set_border_width(GTK_CONTAINER(radio_vbox), 4);
+  gtk_container_add(GTK_CONTAINER(area_frame), radio_vbox);
+  GtkWidget* rb_anywhere = gtk_radio_button_new_with_label(NULL, "Anywhere");
+  GtkWidget* rb_author = gtk_radio_button_new_with_label_from_widget(
+      GTK_RADIO_BUTTON(rb_anywhere), "Author name");
+  GtkWidget* rb_title = gtk_radio_button_new_with_label_from_widget(
+      GTK_RADIO_BUTTON(rb_anywhere), "Music title");
+  GtkWidget* rb_filename = gtk_radio_button_new_with_label_from_widget(
+      GTK_RADIO_BUTTON(rb_anywhere), "File name");
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rb_anywhere), TRUE);
+  gtk_box_pack_start(GTK_BOX(radio_vbox), rb_anywhere, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(radio_vbox), rb_author, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(radio_vbox), rb_title, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(radio_vbox), rb_filename, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(vbox), area_frame, FALSE, FALSE, 0);
+
+  GtkWidget* btn_hbox = gtk_hbox_new(TRUE, 4);
+  GtkWidget* find_next_btn = gtk_button_new_with_label("Find next");
+  GtkWidget* find_all_btn = gtk_button_new_with_label("Find all");
+  gtk_box_pack_start(GTK_BOX(btn_hbox), find_next_btn, TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(btn_hbox), find_all_btn, TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(vbox), btn_hbox, FALSE, FALSE, 0);
+
+  find_dialog_ctx ctx = {w, entry, rb_author, rb_title, rb_filename};
+  g_signal_connect(find_next_btn, "clicked", G_CALLBACK(on_find_next_clicked),
+                    &ctx);
+  g_signal_connect(find_all_btn, "clicked", G_CALLBACK(on_find_all_clicked),
+                    &ctx);
+
+  gtk_widget_show_all(dlg);
+  gtk_dialog_run(GTK_DIALOG(dlg)); /* only GTK_STOCK_CLOSE has a response
+                                     * id, so this returns on Close or
+                                     * window-close - Find Next/Find All
+                                     * are handled entirely by their own
+                                     * signal handlers above and don't
+                                     * end the dialog */
+  gtk_widget_destroy(dlg);
+}
+
+void gui_playlist_win_destroy(gui_playlist_win* w) {
+  gui_playlist_free(&w->model);
+  gtk_widget_destroy(w->window);
+}

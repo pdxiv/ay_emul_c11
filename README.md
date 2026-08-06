@@ -4,13 +4,14 @@ A from-scratch C11 port of [Ay_Emul](https://sourceforge.net/projects/ay-emul/),
 
 ## Status
 
-Phases 0–4 of the plan below are done and oracle-validated (see `migration_debt.yaml` for still-open MIG-#### entries and `migration_debt_validated.yaml` for closed-out ones — split across two files to keep each one workable in size; see "Porting conventions" below). Phase 5 (GUI) has not started. Concretely:
+Phases 0–4 of the plan below are done and oracle-validated (see `migration_debt.yaml` for still-open MIG-#### entries and `migration_debt_validated.yaml` for closed-out ones — split across two files to keep each one workable in size; see "Porting conventions" below). Phase 5 (GUI)'s kickoff milestone is done: a working GTK2 skinned playback window plus a `.lfm`-to-C11-skeleton generator proof of concept — see MIG-0063 through MIG-0067 for exactly what landed and what remains deferred. Concretely:
 
 - **Engine** (`engine/`): Z80 (superzazu/z80) and 68000 (Musashi) CPU cores, the AY-3-8910/12 sound chip, Atari ST hardware (MFP/DMA-sound/scheduling), and format loaders for AY/YM/PT3/VTX (byte-identical against the real binary) and SNDH (loads and runs, but see MIG-0021 for its one known-incomplete gap: no audible output yet).
 - **`tools/identify_ay_file/`**: a standalone AY/YM format identification utility (not part of playback), covering ~19 formats, oracle-diff-verified against the real binary for the ~9 it can fully verify this way.
 - **`tools/ay_player/`**: a minimal CLI player/WAV exporter (`ay_player <file> [--wav=<path>] [--seconds=N]`) driving the engine through ALSA or a hand-rolled WAV writer, oracle-diff-verified byte-identical against the real binary's WAV export.
+- **`gui/`**: a GTK2 skinned playback window reproducing `MainWin.pas`'s exact `.ays` skin format, window silhouette, and button/LED/slider hit-testing (see MIG-0063–MIG-0065) — Play/Pause/Stop/Open/volume all wired to real ALSA playback. `tools/lfm_gen/`: the `.lfm`-to-C11-skeleton generator, proven against two dialogs (MIG-0066). Everything else in Phase 5's scope (tray icon, drag-and-drop, visualizer, playlist, seeking, remaining dialogs, etc.) is explicitly deferred — see MIG-0067.
 
-Read [PORTING_TO_C11_LINUX.md](PORTING_TO_C11_LINUX.md) before starting Phase 5 or touching anything foundational — it's the feasibility assessment and design-decision record this whole port follows.
+Read [PORTING_TO_C11_LINUX.md](PORTING_TO_C11_LINUX.md) before starting Phase 5 or touching anything foundational — it's the feasibility assessment and design-decision record this whole port follows. Phase 5's ongoing, feature-by-feature implementation status is tracked separately in [PHASE5_GUI_PROGRESS.md](PHASE5_GUI_PROGRESS.md), updated as work lands rather than once at the end.
 
 ## Source
 
@@ -31,7 +32,7 @@ The recommended build order (§8 of that document):
 2. Format parsers (hand-ported, no library equivalent exists) — **done** (SNDH partially — MIG-0021)
 3. ALSA output — **done**
 4. A minimal CLI/headless player + WAV export — **done**
-5. GUI (GTK3/4), as a separate, later effort — **not started**
+5. GUI (GTK2, matching the original), as a separate, later effort — **kickoff milestone done** (skinned playback window + `.lfm` generator proof of concept; see MIG-0063–MIG-0067 for landed vs. deferred scope)
 
 ## Porting conventions
 

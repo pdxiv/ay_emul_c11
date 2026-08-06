@@ -70,6 +70,12 @@ typedef struct ftc_file {
   uint16_t ornaments_pointers[33];
   uint32_t positions_offset;
   int64_t global_tick_counter;
+
+  /* Raw (untranscoded CP1251), space-trimmed module title - Players.pas:
+   * "else if FType = FT.FTC" (7372-7380): a fixed 42-byte field at file
+   * offset 8 (within FTC_MusicName[0..68]@0's larger 69-byte area) -
+   * added for the Phase 5 GUI, MIG-0082. */
+  char title[64];
 } ftc_file;
 
 ftc_file_status ftc_file_load(ftc_file* f, const uint8_t* data, size_t size,

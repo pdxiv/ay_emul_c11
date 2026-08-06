@@ -15,6 +15,45 @@ static int16_t be16s(const uint8_t* p) {
   return (int16_t)be16u(p);
 }
 
+/* Players.pas:7153-7184's AuthorString/MiscString/SongName walk: read a
+ * smallint pointer at `field_offset` (relative to its own field position,
+ * same convention as locate_song_data), then read a NUL-terminated
+ * string at that target, then Trim() (strip leading/trailing whitespace/
+ * control bytes <= ' '). Bytes are copied verbatim, NOT transcoded -
+ * real .ay author/title/comment text is CP1251-encoded (settings.pas's
+ * non-Windows CodePageDef default) but that transcoding is a display
+ * concern, done at the GUI layer (see gui/src/playback.c), matching the
+ * engine-stays-audio-focused split already used for pause/volume/
+ * position (gui/include/gui/playback.h's own file comment). */
+static void read_relative_pstring(const uint8_t* data, size_t size,
+                                   int64_t field_offset, char* out,
+                                   size_t cap) {
+  out[0] = '\0';
+  if (cap == 0) return;
+  if (field_offset < 0 || (size_t)field_offset + 2 > size) return;
+  int64_t str_pos = field_offset + be16s(data + field_offset);
+  if (str_pos < 0 || (size_t)str_pos >= size) return;
+
+  size_t n = 0;
+  while ((size_t)str_pos + n < size && data[(size_t)str_pos + n] != 0 &&
+         n + 1 < cap) {
+    out[n] = (char)data[(size_t)str_pos + n];
+    n++;
+  }
+  out[n] = '\0';
+
+  /* Trim: strip leading/trailing bytes <= ' ' (Pascal's Trim on an
+   * 8-bit string - matches for the ASCII whitespace/control range
+   * regardless of the string's actual codepage, since CP1251's
+   * printable range is entirely > ' '). */
+  size_t start = 0;
+  while (start < n && (unsigned char)out[start] <= ' ') start++;
+  size_t end = n;
+  while (end > start && (unsigned char)out[end - 1] <= ' ') end--;
+  if (start > 0) memmove(out, out + start, end - start);
+  out[end - start] = '\0';
+}
+
 static const uint8_t DUMP_IM1[13] = {0xF3, 0xCD, 0, 0,   0xED, 0x56, 0xFB,
                                       0x76, 0xCD, 0, 0,   0x18, 0xF7};
 static const uint8_t DUMP_IM2[10] = {0xF3, 0xCD, 0,    0,    0xED,
@@ -135,6 +174,28 @@ ay_file_status ay_file_load(ay_file* f, const uint8_t* data, size_t size,
 
   song_data_pos = locate_song_data(data, size, song_index, &status);
   if (status != AY_FILE_OK) return status;
+
+  /* data[16] = NumOfSongs, the 0-based max valid song_index (see
+   * locate_song_data's own citation) - already range-checked to exist by
+   * the size>=20 guard above. */
+  f->song_count = data[16] + 1;
+
+  /* Author/title/comment (Players.pas:7154-7184) - see ay_file.h's file
+   * comment: field offsets 12/14 are PAuthor/PMisc's own byte positions
+   * within TAYFileHeader (FileID(4)+TypeID(4)+FileVersion(1)+
+   * PlayerVersion(1)+PSpecialPlayer(2)=12, +PAuthor(2)=14). The per-song
+   * title's PSongName field sits at the start of this song's
+   * TSongStructure entry, i.e. PSongsStructure's target (offset 18) plus
+   * song_index*4 - matching locate_song_data's own `i` computation
+   * before it adds the +2 to skip to PSongData. */
+  read_relative_pstring(data, size, 12, f->author, sizeof(f->author));
+  read_relative_pstring(data, size, 14, f->comment, sizeof(f->comment));
+  {
+    int64_t songs_structure_ptr = be16s(data + 18);
+    int64_t song_name_field = songs_structure_ptr + 18 + (int64_t)song_index * 4;
+    read_relative_pstring(data, size, song_name_field, f->title,
+                           sizeof(f->title));
+  }
 
   /* TSongData (14 bytes): ChanA,ChanB,ChanC,Noise (unused - see
    * Players.pas:3926-4008, never read there), SongLength, FadeLength

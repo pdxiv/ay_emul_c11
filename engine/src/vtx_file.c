@@ -116,6 +116,8 @@ vtx_file_status vtx_file_load(vtx_file* f, const uint8_t* data, size_t size,
     double interrupt_freq = (double)inter_frq * 1000.0;
     f->ay_tiks_in_interrupt =
         (int64_t)((double)chip_frq / (interrupt_freq / 1000.0 * 8.0) + 0.5);
+    f->interrupt_freq = interrupt_freq;
+    f->ay_freq = (double)chip_frq;
   }
 
   return VTX_FILE_OK;

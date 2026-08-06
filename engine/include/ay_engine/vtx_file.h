@@ -69,6 +69,19 @@ typedef struct vtx_file {
   int64_t ay_tiks_in_interrupt; /* AY.pas: AY_Tiks_In_Interrupt, from this
                                  * file's own ChipFrq/InterFrq header
                                  * fields - see MainWin.pas:2070. */
+  double interrupt_freq; /* settings.pas: Interrupt_Freq (InterFrq*1000) -
+                           * the same value already used to derive
+                           * ay_tiks_in_interrupt above, stored directly
+                           * too (added for the Phase 5 GUI's seek/
+                           * duration support, MIG-0080 - one VTX "tick"
+                           * is 1/interrupt_freq real seconds, same
+                           * convention as ym_file.h's own field). */
+  double ay_freq; /* settings.pas: AY_Freq, from the header's ChipFrq -
+                    * previously only used transiently at load time to
+                    * derive ay_tiks_in_interrupt, now stored (matching
+                    * ym_file.h's own ay_freq field) so a live chip-
+                    * frequency override (player_set_chip_freq, MIG-0087)
+                    * can recompute ay_tiks_in_interrupt later too. */
 } vtx_file;
 
 /* Parses `data`/`size` (the whole .vtx file's bytes) and sets up f->ay

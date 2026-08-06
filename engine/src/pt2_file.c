@@ -36,6 +36,26 @@ static uint16_t rd16(const uint8_t* d, uint32_t addr) {
 
 static uint8_t rb(const uint8_t* d, uint32_t addr) { return d[addr & 0xFFFF]; }
 
+/* Copies a fixed-width, space-padded (not NUL-terminated) field, then
+ * trims leading/trailing bytes <= ' ' - see gtr_file.c's identical helper for
+ * the full rationale (duplicated per this project's per-file
+ * convention). */
+static void copy_fixed_field(const uint8_t* src, size_t src_size,
+                              size_t field_offset, size_t field_len,
+                              char* out, size_t cap) {
+  out[0] = '\0';
+  if (cap == 0 || field_offset + field_len > src_size) return;
+  size_t n = field_len;
+  if (n >= cap) n = cap - 1;
+  memcpy(out, src + field_offset, n);
+  out[n] = '\0';
+  while (n > 0 && (unsigned char)out[n - 1] <= ' ') n--;
+  out[n] = '\0';
+  size_t start = 0;
+  while (start < n && (unsigned char)out[start] <= ' ') start++;
+  if (start > 0) memmove(out, out + start, n - start + 1);
+}
+
 /* ModTypes variant 5 (Players.pas:128-135): PT2_Delay@0
  * PT2_NumberOfPositions@1 PT2_LoopPosition@2
  * PT2_SamplesPointers[0..31]@3 (64B) PT2_OrnamentsPointers[0..15]@67
@@ -51,6 +71,9 @@ pt2_file_status pt2_file_load(pt2_file* f, const uint8_t* data, size_t size,
   if (size < 131) return PT2_FILE_ERR_TRUNCATED;
   if (size > 65536) size = 65536; /* Players.pas:2253: clamped to 65536 */
   memcpy(f->data, data, size);
+
+  /* Players.pas: "else if FType = FT.PT2" (7394-7402). */
+  copy_fixed_field(f->data, size, 101, 30, f->title, sizeof(f->title));
 
   f->delay = f->data[0];
   f->loop_position = f->data[2];

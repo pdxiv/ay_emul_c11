@@ -1,4 +1,4 @@
-#include "player/format.h"
+#include "ay_engine/player.h"
 
 #include <string.h>
 #include <strings.h>
@@ -78,12 +78,18 @@ static player_format detect_by_extension(const char* path) {
 
 player_status player_load(player* p, const char* path, const uint8_t* data,
                            size_t size, int sample_rate) {
+  return player_load_song(p, path, data, size, sample_rate, 0);
+}
+
+player_status player_load_song(player* p, const char* path,
+                                const uint8_t* data, size_t size,
+                                int sample_rate, int song_index) {
   p->format = detect(data, size);
   if (p->format == PLAYER_FORMAT_UNKNOWN)
     p->format = detect_by_extension(path);
   switch (p->format) {
     case PLAYER_FORMAT_AY:
-      if (ay_file_load(&p->as.ay, data, size, 0, AY_FILE_AY_FREQ_DEF,
+      if (ay_file_load(&p->as.ay, data, size, song_index, AY_FILE_AY_FREQ_DEF,
                         AY_FILE_FRQ_Z80_DEF, sample_rate) != AY_FILE_OK)
         return PLAYER_ERR_LOAD_FAILED;
       return PLAYER_OK;
@@ -322,5 +328,316 @@ const char* player_format_name(player_format fmt) {
     case PLAYER_FORMAT_UNKNOWN:
     default:
       return "unknown";
+  }
+}
+
+int player_song_count(const player* p) {
+  if (p->format == PLAYER_FORMAT_AY) return p->as.ay.song_count;
+  return 1; /* every other format: no subsong-selection concept yet */
+}
+
+ay_chip_type player_chip_type(const player* p) {
+  switch (p->format) {
+    case PLAYER_FORMAT_AY:
+      return p->as.ay.ay.chip_type;
+    case PLAYER_FORMAT_YM:
+      return p->as.ym.ay.chip_type;
+    case PLAYER_FORMAT_PT3:
+      return p->as.pt3.ay.chip_type;
+    case PLAYER_FORMAT_SNDH:
+      return p->as.sndh.ay.chip_type;
+    case PLAYER_FORMAT_VTX:
+      return p->as.vtx.ay.chip_type;
+    case PLAYER_FORMAT_PT1:
+      return p->as.pt1.ay.chip_type;
+    case PLAYER_FORMAT_GTR:
+      return p->as.gtr.ay.chip_type;
+    case PLAYER_FORMAT_FLS:
+      return p->as.fls.ay.chip_type;
+    case PLAYER_FORMAT_STC:
+      return p->as.stc.ay.chip_type;
+    case PLAYER_FORMAT_STP:
+      return p->as.stp.ay.chip_type;
+    case PLAYER_FORMAT_PT2:
+      return p->as.pt2.ay.chip_type;
+    case PLAYER_FORMAT_FXM:
+      return p->as.fxm.ay.chip_type;
+    case PLAYER_FORMAT_PSM:
+      return p->as.psm.ay.chip_type;
+    case PLAYER_FORMAT_ASC:
+    case PLAYER_FORMAT_ASC0:
+      return p->as.asc.ay.chip_type;
+    case PLAYER_FORMAT_FTC:
+      return p->as.ftc.ay.chip_type;
+    case PLAYER_FORMAT_PSC:
+      return p->as.psc.ay.chip_type;
+    case PLAYER_FORMAT_SQT:
+      return p->as.sqt.ay.chip_type;
+    case PLAYER_FORMAT_UNKNOWN:
+    default:
+      return AY_CHIP_TYPE_AY;
+  }
+}
+
+static void copy_or_empty(const char* src, char* out, size_t cap) {
+  if (!out || cap == 0) return;
+  if (src) {
+    strncpy(out, src, cap - 1);
+    out[cap - 1] = '\0';
+  } else {
+    out[0] = '\0';
+  }
+}
+
+void player_get_metadata_raw(const player* p, char* author,
+                              size_t author_cap, char* title,
+                              size_t title_cap, char* comment,
+                              size_t comment_cap) {
+  switch (p->format) {
+    case PLAYER_FORMAT_AY:
+      copy_or_empty(p->as.ay.author, author, author_cap);
+      copy_or_empty(p->as.ay.title, title, title_cap);
+      copy_or_empty(p->as.ay.comment, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_YM:
+      copy_or_empty(p->as.ym.author, author, author_cap);
+      copy_or_empty(p->as.ym.title, title, title_cap);
+      copy_or_empty(p->as.ym.comment, comment, comment_cap);
+      break;
+    /* GTR/FTC/PT1/PT2 (MIG-0082) only ever had a Title field in
+     * Players.pas's own AddTrackerModule (7345-7402) - no Author, no
+     * Comment. */
+    case PLAYER_FORMAT_GTR:
+      copy_or_empty(NULL, author, author_cap);
+      copy_or_empty(p->as.gtr.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_FTC:
+      copy_or_empty(NULL, author, author_cap);
+      copy_or_empty(p->as.ftc.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_PT1:
+      copy_or_empty(NULL, author, author_cap);
+      copy_or_empty(p->as.pt1.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_PT2:
+      copy_or_empty(NULL, author, author_cap);
+      copy_or_empty(p->as.pt2.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_PT3:
+      copy_or_empty(p->as.pt3.author, author, author_cap);
+      copy_or_empty(p->as.pt3.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_PSC:
+      copy_or_empty(p->as.psc.author, author, author_cap);
+      copy_or_empty(p->as.psc.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    /* ASC/ASC0/STP/PSM (MIG-0083): title only (STP/PSM never had an
+     * Author field in Players.pas's own title-extraction branches for
+     * them; ASC/ASC0 DO have one). */
+    case PLAYER_FORMAT_ASC:
+    case PLAYER_FORMAT_ASC0:
+      copy_or_empty(p->as.asc.author, author, author_cap);
+      copy_or_empty(p->as.asc.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_STP:
+      copy_or_empty(NULL, author, author_cap);
+      copy_or_empty(p->as.stp.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    case PLAYER_FORMAT_PSM:
+      copy_or_empty(NULL, author, author_cap);
+      copy_or_empty(p->as.psm.title, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+    default:
+      copy_or_empty(NULL, author, author_cap);
+      copy_or_empty(NULL, title, title_cap);
+      copy_or_empty(NULL, comment, comment_cap);
+      break;
+  }
+}
+
+ay_engine* player_ay_engine(player* p) {
+  switch (p->format) {
+    case PLAYER_FORMAT_AY:
+      return &p->as.ay.ay;
+    case PLAYER_FORMAT_YM:
+      return &p->as.ym.ay;
+    case PLAYER_FORMAT_PT3:
+      return &p->as.pt3.ay;
+    case PLAYER_FORMAT_SNDH:
+      return &p->as.sndh.ay;
+    case PLAYER_FORMAT_VTX:
+      return &p->as.vtx.ay;
+    case PLAYER_FORMAT_PT1:
+      return &p->as.pt1.ay;
+    case PLAYER_FORMAT_GTR:
+      return &p->as.gtr.ay;
+    case PLAYER_FORMAT_FLS:
+      return &p->as.fls.ay;
+    case PLAYER_FORMAT_STC:
+      return &p->as.stc.ay;
+    case PLAYER_FORMAT_STP:
+      return &p->as.stp.ay;
+    case PLAYER_FORMAT_PT2:
+      return &p->as.pt2.ay;
+    case PLAYER_FORMAT_FXM:
+      return &p->as.fxm.ay;
+    case PLAYER_FORMAT_PSM:
+      return &p->as.psm.ay;
+    case PLAYER_FORMAT_ASC:
+    case PLAYER_FORMAT_ASC0:
+      return &p->as.asc.ay;
+    case PLAYER_FORMAT_FTC:
+      return &p->as.ftc.ay;
+    case PLAYER_FORMAT_PSC:
+      return &p->as.psc.ay;
+    case PLAYER_FORMAT_SQT:
+      return &p->as.sqt.ay;
+    case PLAYER_FORMAT_UNKNOWN:
+    default:
+      return &p->as.ay.ay; /* unreachable after a successful load - see
+                             * this function's own header comment */
+  }
+}
+
+bool player_get_tick_position(const player* p, int64_t* counter,
+                               int64_t* max) {
+  *counter = 0;
+  *max = 0;
+  switch (p->format) {
+    case PLAYER_FORMAT_AY:
+      *counter = p->as.ay.global_tick_counter;
+      *max = p->as.ay.global_tick_max;
+      return true;
+    case PLAYER_FORMAT_YM:
+      *counter = p->as.ym.global_tick_counter;
+      *max = p->as.ym.global_tick_max;
+      return true;
+    case PLAYER_FORMAT_VTX:
+      *counter = p->as.vtx.global_tick_counter;
+      *max = p->as.vtx.global_tick_max;
+      return true;
+    /* PT1/PT2/PT3/GTR/FLS/STC/STP/FXM/PSM/ASC/ASC0/FTC/PSC/SQT all have
+     * global_tick_counter but genuinely no global_tick_max field -
+     * their song-length/duration precompute (PT3.pas's own GetTimePT3
+     * is the documented example, pt3_file.h: "UI-only, not needed [for
+     * audio correctness]") was a deliberate, already-recorded earlier
+     * scope decision to skip, not an oversight discovered here. No
+     * "total ticks" means no meaningful fraction to seek by - same
+     * "unknown/no reliable duration" case as SNDH below, for a
+     * different underlying reason (a real duration concept the file
+     * format has but this port never computed, vs. SNDH's separate
+     * Atari-VBL position model). */
+    case PLAYER_FORMAT_PT1:
+    case PLAYER_FORMAT_PT2:
+    case PLAYER_FORMAT_PT3:
+    case PLAYER_FORMAT_GTR:
+    case PLAYER_FORMAT_FLS:
+    case PLAYER_FORMAT_STC:
+    case PLAYER_FORMAT_STP:
+    case PLAYER_FORMAT_FXM:
+    case PLAYER_FORMAT_PSM:
+    case PLAYER_FORMAT_ASC:
+    case PLAYER_FORMAT_ASC0:
+    case PLAYER_FORMAT_FTC:
+    case PLAYER_FORMAT_PSC:
+    case PLAYER_FORMAT_SQT:
+    case PLAYER_FORMAT_SNDH:
+    case PLAYER_FORMAT_UNKNOWN:
+    default:
+      return false;
+  }
+}
+
+double player_get_seconds_per_tick(const player* p) {
+  switch (p->format) {
+    case PLAYER_FORMAT_AY:
+      if (p->as.ay.frq_z80 <= 0) return 0.0;
+      return (double)p->as.ay.bus.max_tstates / (double)p->as.ay.frq_z80;
+    /* interrupt_freq is stored pre-scaled by 1000 (ym_file.c/vtx_file.c:
+     * `interrupt_freq = inter_frq * 1000.0`, mirroring Players.pas's own
+     * Interrupt_Freq := InterFrq*1000) - RerollMusic's own BaseSample
+     * formula (`Global_Tick_Counter * 1000 / Interrupt_Freq * SampleRate`)
+     * divides by Interrupt_Freq with an explicit *1000 in the numerator,
+     * i.e. seconds-per-tick = 1000/Interrupt_Freq, NOT 1/Interrupt_Freq -
+     * confirmed by testing: without the *1000, a typical 50Hz VTX/YM
+     * tick rate came out as 0.00002s/tick (50000Hz) instead of the
+     * correct 0.02s/tick (50Hz). */
+    case PLAYER_FORMAT_YM:
+      if (p->as.ym.interrupt_freq <= 0.0) return 0.0;
+      return 1000.0 / p->as.ym.interrupt_freq;
+    case PLAYER_FORMAT_VTX:
+      if (p->as.vtx.interrupt_freq <= 0.0) return 0.0;
+      return 1000.0 / p->as.vtx.interrupt_freq;
+    default:
+      return 0.0;
+  }
+}
+
+void player_set_chip_freq(player* p, int ay_freq, int sample_rate) {
+  if (sample_rate <= 0) return;
+  ay_engine* e = player_ay_engine(p);
+  e->delay_in_tiks = (uint32_t)(8192.0 / sample_rate * ay_freq + 0.5);
+  e->tik_re = e->delay_in_tiks;
+
+  switch (p->format) {
+    case PLAYER_FORMAT_AY:
+      if (p->as.ay.frq_z80 > 0) {
+        p->as.ay.ay.frq_ay_by_frq_z80 = (int64_t)(
+            (double)ay_freq / p->as.ay.frq_z80 / 8.0 * 4294967296.0 + 0.5);
+      }
+      break;
+    case PLAYER_FORMAT_VTX:
+      p->as.vtx.ay_freq = (double)ay_freq;
+      if (p->as.vtx.interrupt_freq > 0.0) {
+        p->as.vtx.ay_tiks_in_interrupt = (int64_t)(
+            (double)ay_freq / (p->as.vtx.interrupt_freq / 1000.0 * 8.0) +
+            0.5);
+      }
+      break;
+    case PLAYER_FORMAT_YM:
+      p->as.ym.ay_freq = (double)ay_freq;
+      if (p->as.ym.interrupt_freq > 0.0) {
+        p->as.ym.ym6_tiks_on_int =
+            (double)ay_freq / (p->as.ym.interrupt_freq / 1000.0 * 8.0);
+      }
+      break;
+    default:
+      break; /* delay_in_tiks/tik_re above still apply universally,
+              * matching Set_Chip_Frq's own unconditional recompute -
+              * see this function's own header comment */
+  }
+}
+
+void player_set_player_freq(player* p, int freq_hz_x1000) {
+  switch (p->format) {
+    case PLAYER_FORMAT_VTX:
+      p->as.vtx.interrupt_freq = (double)freq_hz_x1000;
+      if (p->as.vtx.ay_freq > 0.0) {
+        p->as.vtx.ay_tiks_in_interrupt =
+            (int64_t)(p->as.vtx.ay_freq /
+                          ((double)freq_hz_x1000 / 1000.0 * 8.0) +
+                      0.5);
+      }
+      break;
+    case PLAYER_FORMAT_YM:
+      p->as.ym.interrupt_freq = (double)freq_hz_x1000;
+      if (p->as.ym.ay_freq > 0.0) {
+        p->as.ym.ym6_tiks_on_int =
+            p->as.ym.ay_freq / ((double)freq_hz_x1000 / 1000.0 * 8.0);
+      }
+      break;
+    default:
+      break; /* AY has no interrupt_freq concept (MaxTStates/FrqZ80
+              * instead) - a documented no-op, see this function's own
+              * header comment */
   }
 }

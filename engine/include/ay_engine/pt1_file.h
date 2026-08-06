@@ -82,6 +82,11 @@ typedef struct pt1_file {
   uint32_t position_list_offset; /* byte offset of PT1_PositionList[0] */
 
   int64_t global_tick_counter; /* informational only - see file comment */
+
+  /* Raw (untranscoded CP1251), space-trimmed module title - Players.pas:
+   * "else if FType = FT.PT1" (7383-7391): a fixed 30-byte field at file
+   * offset 69 - added for the Phase 5 GUI, MIG-0082. */
+  char title[64];
 } pt1_file;
 
 /* Parses `data`/`size` (the whole .pt1 file's bytes - standalone files

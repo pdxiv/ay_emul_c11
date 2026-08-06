@@ -66,6 +66,14 @@ typedef struct stp_file {
   uint16_t ornaments_pointer;
   uint16_t samples_pointer;
   int64_t global_tick_counter;
+
+  /* Raw (untranscoded CP1251), space-trimmed title - Players.pas:
+   * "else if FType = FT.STP" (7498-7530): a 28-byte signature check at
+   * file offset 10 against KsaId = 'KSA SOFTWARE COMPILATION OF ' -
+   * only if it matches is there a title at all (25 bytes, right after
+   * the signature, offset 38). No Author field in this branch. Added
+   * for the Phase 5 GUI, MIG-0083. */
+  char title[64];
 } stp_file;
 
 stp_file_status stp_file_load(stp_file* f, const uint8_t* data, size_t size,

@@ -55,6 +55,17 @@ typedef struct psm_file {
   uint16_t ornaments_pointer;
   uint16_t patterns_pointer;
   int64_t global_tick_counter;
+
+  /* Raw (untranscoded CP1251), space-trimmed title - Players.pas:
+   * "else if FType = FT.PSM" (7532-7550): a variable-length "remark"
+   * field at file offset 8, length PositionsPointer-8 (only present if
+   * PositionsPointer > 8). If the remark starts with a "psm1\0" prefix
+   * AND is longer than 5 bytes, that prefix is stripped and the rest
+   * used as the title; if the remark is EXACTLY "psm1\0" (5 bytes, that
+   * literal content), it's a sentinel meaning "no real title" and this
+   * stays empty; otherwise the whole remark is the title. Added for
+   * the Phase 5 GUI, MIG-0083. */
+  char title[64];
 } psm_file;
 
 psm_file_status psm_file_load(psm_file* f, const uint8_t* data, size_t size,

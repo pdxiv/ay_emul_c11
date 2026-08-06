@@ -509,6 +509,107 @@ void ay_engine_reset_chip(ay_engine* e, bool zeroregs) {
   e->int_flag = false;
 }
 
+/* MainWin.pas:1737-1741 (see ay.h's own comment on the latency_seconds
+ * substitution). */
+void ay_engine_init_vis(ay_engine* e, int sample_rate, double latency_seconds) {
+  memset(e->vis_points, 0, sizeof(e->vis_points));
+  e->mk_vis_pos = 0;
+  e->vis_point = 0;
+  e->vis_tick = 0;
+  if (sample_rate <= 0) {
+    e->vis_pos_max = 0;
+    e->vis_step = 0;
+    e->vis_tick_max = 0;
+    return;
+  }
+  e->vis_step = (uint32_t)((double)sample_rate / 100.0 + 0.5);
+  if (e->vis_step == 0) e->vis_step = 1;
+  double latency_frames = (double)sample_rate * latency_seconds;
+  uint32_t pos_max =
+      (uint32_t)(latency_frames / (double)e->vis_step + 0.5) + 1;
+  if (pos_max > AY_VIS_POINTS_CAP) pos_max = AY_VIS_POINTS_CAP;
+  if (pos_max == 0) pos_max = 1;
+  e->vis_pos_max = pos_max;
+  e->vis_tick_max = e->vis_step * e->vis_pos_max;
+}
+
+/* AY.pas:588-619, FillVis - captures a raw register snapshot into the
+ * ring buffer and advances the write cursor/next-trigger threshold.
+ * Called from ay_synthesizer_stereo16's inner sample-writing loop (see
+ * that function's own comment on exactly where/why). */
+static void ay_engine_fill_vis(ay_engine* e) {
+  ay_vis_point* p = &e->vis_points[e->mk_vis_pos];
+  p->tn_a = ay_reg_tona(&e->chip);
+  p->tn_b = ay_reg_tonb(&e->chip);
+  p->tn_c = ay_reg_tonc(&e->chip);
+  p->mix = e->chip.reg[7];
+  p->amp_a = e->chip.reg[8];
+  p->amp_b = e->chip.reg[9];
+  p->amp_c = e->chip.reg[10];
+  p->amp_e = e->chip.ampl;
+  p->env_p = (int32_t)ay_reg_envelope(&e->chip);
+  p->env_t = e->chip.reg[13];
+  p->calc = false;
+
+  e->mk_vis_pos++;
+  if (e->mk_vis_pos >= e->vis_pos_max) e->mk_vis_pos = 0;
+  e->vis_point += e->vis_step;
+}
+
+/* AY.pas:5308-5344's AYVisualisation, the per-channel Calc block only
+ * (T/E/A/TE locals renamed for clarity; the case/if structure and
+ * arithmetic are unchanged). `te` is Pascal's `Mix and bit = 0` (tone
+ * enabled is an ACTIVE-LOW mixer bit) evaluated by the caller. */
+static void ay_vis_calc_channel(int32_t* tn, int32_t* amp, int32_t env_t,
+                                 int32_t env_p, int32_t e_val, bool te) {
+  int32_t t = *tn;
+  if ((*amp & 16) == 0) {
+    *amp = *amp * 2;
+  } else if (!(env_t == 8 || env_t == 10 || env_t == 12 || env_t == 14)) {
+    *amp = e_val;
+  } else {
+    int32_t a = e_val;
+    if (t <= 3 && te) {
+      a -= 6;
+    } else if (te) {
+      a = 30;
+    }
+    *amp = a;
+    if (t <= 3 || !te) {
+      t = (env_t == 8 || env_t == 12) ? env_p * 16 : env_p * 32;
+    }
+  }
+  *tn = t;
+}
+
+static void ay_vis_calc(ay_vis_point* p) {
+  int32_t e_val;
+  switch (p->env_t) {
+    case 8: case 12: e_val = 28; break;
+    case 10: case 14: e_val = 26; break;
+    default:
+      e_val = p->amp_e - 1;
+      if (e_val < 0) e_val = 0;
+      break;
+  }
+  ay_vis_calc_channel(&p->tn_a, &p->amp_a, p->env_t, p->env_p, e_val,
+                      (p->mix & 1) == 0);
+  ay_vis_calc_channel(&p->tn_b, &p->amp_b, p->env_t, p->env_p, e_val,
+                      (p->mix & 2) == 0);
+  ay_vis_calc_channel(&p->tn_c, &p->amp_c, p->env_t, p->env_p, e_val,
+                      (p->mix & 4) == 0);
+  p->calc = true;
+}
+
+const ay_vis_point* ay_engine_get_vis_point(ay_engine* e, uint32_t smp) {
+  if (e->vis_pos_max == 0 || e->vis_tick_max == 0) return NULL;
+  uint32_t cur_vis_pos = (smp % e->vis_tick_max) / e->vis_step;
+  if (cur_vis_pos >= e->vis_pos_max) cur_vis_pos = e->vis_pos_max - 1;
+  ay_vis_point* p = &e->vis_points[cur_vis_pos];
+  if (!p->calc) ay_vis_calc(p);
+  return p;
+}
+
 /* AY.pas:942-1008, Calculate_Level_Tables (single-chip / no Turbosound,
  * see ay.h for scope). */
 void ay_engine_calculate_level_tables(ay_engine* e) {
@@ -694,6 +795,14 @@ void ay_synthesizer_stereo16(ay_engine* e) {
         out[e->buf_len * 2] = l16;
         out[e->buf_len * 2 + 1] = r16;
         e->tik_re += e->delay_in_tiks;
+        /* AY.pas:679-680 (MIG-0094) - a no-op whenever vis sampling
+         * isn't enabled (vis_pos_max==0, ay_engine_init's default), so
+         * every caller that never calls ay_engine_init_vis is
+         * byte-for-byte unaffected. */
+        if (e->vis_pos_max != 0 && e->vis_tick == e->vis_point) {
+          ay_engine_fill_vis(e);
+        }
+        e->vis_tick++;
         e->buf_len++;
         if (e->buf_len == e->buffer_length) {
           if (e->current_tik < number_of_tiks_hi(e)) e->int_flag = true;

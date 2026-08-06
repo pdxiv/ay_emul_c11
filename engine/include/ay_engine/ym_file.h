@@ -10,7 +10,9 @@
  *    7708-7736) and the YM5/YM6 header parse incl. digidrum descriptor
  *    table + Title/Author/Comment string scan to locate the register-data
  *    offset (Players.pas:7745-7814, TYM5FileHeader, Players.pas:2812-2870
- *    for the corresponding per-play setup).
+ *    for the corresponding per-play setup). The three strings' CONTENT is
+ *    also captured now (f->title/f->author/f->comment - added for the
+ *    Phase 5 GUI, see MIG-0075), not just skipped past.
  *  - The register-plane reader for the "extended" (bit0 of Song_Attr's
  *    last byte set) YM5 variant, YM5i_Get_Registers (Players.pas:
  *    13653-13819) - confirmed via this project's own real test file to be
@@ -115,6 +117,14 @@ typedef struct ym_file {
   int64_t global_tick_max;
   bool do_loop;
   bool real_end_all;
+
+  /* Raw (untranscoded CP1251 - see ay_file.h's identical note)
+   * Title/Author/Comment, in that order in the file (Players.pas:
+   * 7791-7809). Added for the Phase 5 GUI alongside the .ay support -
+   * empty if the string is empty in the file (a real, common case). */
+  char title[256];
+  char author[256];
+  char comment[256];
 } ym_file;
 
 /* Parses `data`/`size` (the whole .ym file's bytes, LHA-compressed or not)

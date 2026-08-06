@@ -17,8 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ay_engine/player.h"
 #include "player/alsa_output.h"
-#include "player/format.h"
 #include "player/wav.h"
 
 #define SAMPLE_RATE 48000

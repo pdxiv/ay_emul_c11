@@ -3,6 +3,7 @@
 # own .gitignore (it deliberately tracks some prebuilt object files - see
 # BUILDING_UBUNTU20.04.md - do not add rules here targeting its contents).
 *.o
+*.d
 *.a
 *.or
 

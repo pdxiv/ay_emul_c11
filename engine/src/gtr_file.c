@@ -27,6 +27,28 @@ static uint16_t rd16(const uint8_t* d, uint32_t addr) {
 
 static uint8_t rb(const uint8_t* d, uint32_t addr) { return d[addr & 0xFFFF]; }
 
+/* Copies a fixed-width, space-padded (not NUL-terminated) field, then
+ * trims leading/trailing bytes <= ' ' - Players.pas reads these title/author
+ * fields as raw fixed-length strings (SetLength(Title,N); UniRead(...,N))
+ * without an explicit Trim in every branch, but every place that
+ * actually displays/compares the result does trim it (e.g. ASC/PSM's
+ * own `Trim(...) <> ''`), so trimming here for consistency. */
+static void copy_fixed_field(const uint8_t* src, size_t src_size,
+                              size_t field_offset, size_t field_len,
+                              char* out, size_t cap) {
+  out[0] = '\0';
+  if (cap == 0 || field_offset + field_len > src_size) return;
+  size_t n = field_len;
+  if (n >= cap) n = cap - 1;
+  memcpy(out, src + field_offset, n);
+  out[n] = '\0';
+  while (n > 0 && (unsigned char)out[n - 1] <= ' ') n--;
+  out[n] = '\0';
+  size_t start = 0;
+  while (start < n && (unsigned char)out[start] <= ' ') start++;
+  if (start > 0) memmove(out, out + start, n - start + 1);
+}
+
 /* ModTypes variant 12 (Players.pas:179-190): GTR_Delay@0 GTR_ID[0..3]@1
  * GTR_Address@5 (word) GTR_Name[0..31]@7 GTR_SamplesPointers[0..14]@39
  * (30B) GTR_OrnamentsPointers[0..15]@69 (32B)
@@ -42,6 +64,11 @@ gtr_file_status gtr_file_load(gtr_file* f, const uint8_t* data, size_t size,
   if (size < 295) return GTR_FILE_ERR_TRUNCATED;
   if (size > 65536) size = 65536; /* Players.pas:2253: clamped to 65536 */
   memcpy(f->data, data, size);
+
+  /* Players.pas: "else if FType = FT.GTR" (7345-7353) - GTR_Name[0..31]@7,
+   * read from the raw file bytes before any pointer relocation touches
+   * f->data (this region is never written to by that relocation). */
+  copy_fixed_field(f->data, size, 7, 32, f->title, sizeof(f->title));
 
   f->delay = f->data[0];
   memcpy(f->id, &f->data[1], 4);

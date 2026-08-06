@@ -79,6 +79,17 @@ typedef struct asc_file {
   uint16_t samples_pointer;
   uint16_t ornaments_pointer;
   int64_t global_tick_counter;
+
+  /* Raw (untranscoded CP1251), space-trimmed title/author - Players.pas:
+   * "else if FType = FT.ASC"/"FT.ASC0" (7436-7473): read at
+   * PatternsPointers-44/-20 (20 bytes each) IF PatternsPointers -
+   * NumberOfPositions equals a magic constant (72 for ASC1, 71 for
+   * ASC0's own pre-shift numbering - see asc_file.c's own comment on
+   * why this port needs only ONE check/offset pair post-normalization).
+   * Empty if that check fails (a real, common case - not every ASC
+   * file has this metadata block). Added for the Phase 5 GUI, MIG-0083. */
+  char title[64];
+  char author[64];
 } asc_file;
 
 /* is_asc0: true for FT.ASC0 input (the older, LoopingPosition-less

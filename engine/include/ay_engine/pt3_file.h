@@ -139,6 +139,15 @@ typedef struct pt3_file {
                                 * ported, so nothing checks this against
                                 * a limit; the caller decides how long to
                                 * play). */
+
+  /* Raw (untranscoded CP1251), space-trimmed title/author - Players.pas:
+   * "else if FType = FT.PT3" (7405-7427): fixed 32-byte fields at file
+   * offsets 0x1E/0x42 - added for the Phase 5 GUI, MIG-0082. The
+   * KsaId2[1]/[2] one-byte reads in that same branch (offsets 13 and
+   * 98) only affect PLItem.FormatSpec's PT-v3.7-TS-format flag, a
+   * playlist/conversion detail out of this port's scope, not ported. */
+  char title[64];
+  char author[64];
 } pt3_file;
 
 /* Parses `data`/`size` (the whole .pt3 file's bytes - standalone files

@@ -67,6 +67,11 @@ typedef struct pt2_file {
   uint16_t patterns_pointer;
   uint32_t position_list_offset;
   int64_t global_tick_counter;
+
+  /* Raw (untranscoded CP1251), space-trimmed module title - Players.pas:
+   * "else if FType = FT.PT2" (7394-7402): a fixed 30-byte field at file
+   * offset 101 - added for the Phase 5 GUI, MIG-0082. */
+  char title[64];
 } pt2_file;
 
 pt2_file_status pt2_file_load(pt2_file* f, const uint8_t* data, size_t size,

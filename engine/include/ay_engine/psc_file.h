@@ -82,6 +82,12 @@ typedef struct psc_file {
   uint16_t ornaments_pointer_base;
   uint16_t samples_pointers[32];
   int64_t global_tick_counter;
+
+  /* Raw (untranscoded CP1251), space-trimmed title/author - Players.pas:
+   * "else if FType = FT.PSC" (7354-7370): fixed 20-byte fields at file
+   * offsets 0x19/0x31 - added for the Phase 5 GUI, MIG-0082. */
+  char title[64];
+  char author[64];
 } psc_file;
 
 psc_file_status psc_file_load(psc_file* f, const uint8_t* data, size_t size,

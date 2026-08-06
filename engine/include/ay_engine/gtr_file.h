@@ -58,6 +58,12 @@ typedef struct gtr_file {
   uint8_t loop_position;
   uint32_t positions_offset;
   int64_t global_tick_counter;
+
+  /* Raw (untranscoded CP1251), space-trimmed module title - Players.pas:
+   * "else if FType = FT.GTR" (7345-7353): a fixed 32-byte field at file
+   * offset 7, no length prefix or terminator (space-padded, not NUL-
+   * terminated) - added for the Phase 5 GUI, MIG-0082. */
+  char title[64];
 } gtr_file;
 
 gtr_file_status gtr_file_load(gtr_file* f, const uint8_t* data, size_t size,

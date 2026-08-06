@@ -90,6 +90,30 @@ void ay_chip_set_ay_register(ay_chip* c, int num, uint8_t value); /* SetAYRegist
 void ay_chip_set_ay_register_fast(ay_chip* c, int num, uint8_t value); /* SetAYRegisterFast */
 void ay_chip_synthesizer_logic_q(ay_chip* c);
 
+/* AY.pas: TVisPoint (106-116), TSMode's R[1] dropped - single-chip only,
+ * matching this port's own established Turbosound scope boundary
+ * (MIG-0007, see ay_engine's own file comment). Before ay_vis_calc has
+ * run (see ay.c), tn_a/tn_b/tn_c/amp_a/amp_b/amp_c/amp_e/env_p/env_t/
+ * mix hold the RAW register snapshot FillVis captured (AY.pas: TonA/
+ * AmplitudeA/etc read straight from RegisterAY); ay_vis_calc overwrites
+ * tn_a/tn_b/tn_c/amp_a/amp_b/amp_c IN PLACE with the envelope-aware
+ * "visual" tone/amplitude values AYVisualisation's own Calc block
+ * derives (amp_e/env_p/env_t/mix become stale afterwards, exactly as
+ * in the original - never read again post-Calc). */
+typedef struct ay_vis_point {
+  int32_t tn_a, tn_b, tn_c;
+  int32_t amp_a, amp_b, amp_c;
+  int32_t amp_e, env_p, env_t, mix;
+  bool calc; /* AY.pas: Calc (0/1) - memoizes the transform above per slot */
+} ay_vis_point;
+
+/* MainWin.pas:1739's VisPosMax is computed at runtime from the actual
+ * ALSA output latency (see ay_engine_init_vis) - this is just a safety
+ * cap on the fixed-size ring buffer below (avoids a heap allocation/
+ * free path for what's normally a couple dozen slots; see MIG-0094's
+ * own sizing note for the real-world numbers this comfortably covers). */
+#define AY_VIS_POINTS_CAP 256
+
 /* Global mixer/engine state, mirroring AY.pas's unit-level globals for the
  * single-chip (non-Turbosound) case. One instance per player session. */
 typedef struct ay_engine {
@@ -187,11 +211,64 @@ typedef struct ay_engine {
   void* buf;
   int buf_len;
   int buffer_length;
+
+  /* MainWin.pas's spectrum/amplitude visualizer sampling (AY.pas:
+   * FillVis/VisPoints, MIG-0094) - a tick-driven historical ring
+   * buffer of raw chip register snapshots, NOT a real signal-domain
+   * FFT (traced end-to-end: RedrawVisSpectrum buckets each channel's
+   * own tone-period register into a log-scale bar by comparing against
+   * Spa_points, using the channel's amplitude register as the bar
+   * height - BASS_DATA_FFT8192 only appears in the separate BASS-
+   * decoded-stream path this port doesn't have). vis_pos_max==0 (the
+   * ay_engine_init default) disables sampling entirely - the
+   * ay_synthesizer_stereo16 hook below is then a no-op, so every
+   * existing caller that never calls ay_engine_init_vis (every
+   * oracle-diff/WAV-sweep/CLI-tool test, and any GUI-embedding future
+   * caller that doesn't need visualization) is byte-for-byte
+   * unaffected. */
+  ay_vis_point vis_points[AY_VIS_POINTS_CAP]; /* AY.pas: VisPoints */
+  uint32_t mk_vis_pos;  /* AY.pas: MkVisPos - FillVis's write cursor */
+  uint32_t vis_pos_max; /* AY.pas: VisPosMax */
+  uint32_t vis_tick;    /* AY.pas: NOfTicks - increments once per output
+                          * sample written (ay_synthesizer_stereo16's
+                          * inner sample-writing loop, matching
+                          * Synthesizer_Stereo16's own Inc(NOfTicks) -
+                          * NOT once per raw AY tick, despite the name
+                          * this mirrors) */
+  uint32_t vis_point;   /* AY.pas: VisPoint - next vis_tick value that
+                          * triggers a FillVis sample */
+  uint32_t vis_step;    /* AY.pas: VisStep */
+  uint32_t vis_tick_max; /* AY.pas: VisTickMax */
 } ay_engine;
 
 void ay_engine_init(ay_engine* e);
 void ay_engine_reset_chip(ay_engine* e, bool zeroregs); /* ResetAYChipEmulation */
 void ay_engine_calculate_level_tables(ay_engine* e); /* Calculate_Level_Tables */
+
+/* MainWin.pas:1737-1741/4814-4816's VisStep/VisPosMax/VisTickMax setup
+ * (MIG-0094) - `latency_seconds` is this port's own ALSA output
+ * latency (tools/ay_player/src/alsa_output.c's snd_pcm_set_params 200ms
+ * argument) standing in for the original's BufferLength*NumberOfBuffers
+ * (a DirectSound multi-buffer concept this port's simpler single ALSA-
+ * write-loop architecture doesn't have an exact equivalent of - see
+ * MIG-0094's own note on why this substitution is a faithful, not
+ * arbitrary, stand-in: both express "how many samples of output
+ * latency exist between generation and audible playback", which is
+ * exactly what VisPosMax's ring-buffer sizing needs to cover). Passing
+ * sample_rate<=0 disables sampling (vis_pos_max left at 0, matching
+ * ay_engine_init's own default-off state). Safe to call again on a
+ * fresh song load - resets mk_vis_pos/vis_point to 0 and clears the
+ * ring buffer, matching Players.pas:4063's own `VisPoint := 0`. */
+void ay_engine_init_vis(ay_engine* e, int sample_rate, double latency_seconds);
+
+/* MainWin.pas: AYVisualisation's per-VisPoint lazy Calc block plus the
+ * CurVisPos lookup (`smp mod VisTickMax div VisStep`) it's keyed by -
+ * `smp` is the cumulative output sample count (gui_playback's own
+ * frames_played). Returns NULL if vis sampling isn't enabled
+ * (ay_engine_init_vis was never called, or called with sample_rate<=0).
+ * The returned pointer is only valid until the next call (points
+ * directly into e->vis_points). */
+const ay_vis_point* ay_engine_get_vis_point(ay_engine* e, uint32_t smp);
 
 /* MainWin.pas: TFrmMain.SetFilter/SetFilter2/CalcFiltKoefs (MainWin.pas:
  * 5073-5168) - designs a Hamming-windowed-sinc lowpass FIR (or disables

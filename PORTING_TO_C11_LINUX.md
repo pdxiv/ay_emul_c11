@@ -507,11 +507,19 @@ territory":
    at smaller scale (15 `Canvas.` calls).
 
 Given all that, **the GUI is the part of this port most worth scoping
-separately and deciding deliberately** — e.g. shipping a correct,
-well-tested headless/CLI player first (which validates the entire engine
-port against real files) and treating the skinned GTK UI as its own
-follow-on project, possibly even with a deliberately simpler (non-skinned)
-first-cut UI rather than reproducing the exact skin-rendering engine.
+separately and deciding deliberately** — which is exactly what happened:
+the headless/CLI player shipped first (phases 0-4, validating the entire
+engine port against real files), and the skinned GTK UI was deliberately
+scoped as its own follow-on project.
+
+**Decision (Phase 5 kickoff): reproduce the exact skin-rendering engine,
+not a simplified non-skinned first cut.** The `.ays`/`.bmc` skin format,
+non-rectangular window shaping (`rgn.inc`/`rgn2.inc`), and the
+`TSensZone`/`TButtZone`/`TLedZone`/`TMoveZone` hit-testing classes all get
+real C11/GTK2/Cairo equivalents — see `gui/` and the Phase 5 migration-debt
+entries for what's landed and what's still outstanding. The GTK-version
+question this implies (§4.1) is also decided: GTK2, matching the
+original, not GTK3/4.
 
 ### 5.1 A `.lfm`-to-C11-skeleton generator, for the standard dialogs specifically
 
@@ -553,6 +561,11 @@ as more automated than it is:
   problem — the anchor graph is arbitrary, not a strict row/column
   structure — not a lookup-table job). This choice should be made
   explicitly before writing the generator, not discovered mid-implementation.
+  **Decided for the Phase 5 kickoff generator: `GtkFixed` with the
+  `.lfm`'s literal coordinates** — simplest, and consistent with the
+  skinned app's own absolute-positioning aesthetic; idiomatic
+  `GtkGrid`/`GtkBox` translation remains a possible future improvement,
+  not required for the dialogs landed so far.
 - **Handler bodies.** `.lfm` only records handler *names*; the logic lives
   in the corresponding `.pas` file and still has to be hand-ported into the
   generated stub, same as any other application code.
@@ -1101,7 +1114,10 @@ part of the codebase, the port is much lower-risk done in this order:
 
 **Status: phases 0–4 done (see `migration_debt.yaml` for still-open
 MIG-#### entries and `migration_debt_validated.yaml` for closed-out
-ones — §9 explains the split); phase 5 (GUI) not started.**
+ones — §9 explains the split); phase 5 (GUI)'s kickoff milestone done
+(skinned GTK2 playback window + `.lfm`-to-C11-skeleton generator proof
+of concept — see MIG-0063 through MIG-0067 for exactly what landed vs.
+what remains deferred), rest of phase 5 not started.**
 
 0. **Run the Z80 fidelity gate** (§7.1) before writing any engine code:
    confirm superzazu/z80 — already decided on — passes ZEXALL/ZEXDOC and
@@ -1145,16 +1161,21 @@ ones — §9 explains the split); phase 5 (GUI) not started.**
    — `tools/ay_player` (`ay_player <file> [--wav=<path>] [--seconds=N]`,
    MIG-0026/0027); WAV export is oracle-diff'd byte-identical against
    `Convs.pas`'s `WAV_Converter`.
-5. **GUI**, last, and treated as its own scoped effort per §5 — likely
-   worth a separate design decision (reproduce the skinned UI exactly, or
-   ship a simpler first-cut with standard GTK widgets) rather than
-   bundling it into the same estimate as 1–4. For the ~14 standard
-   dialogs, start with the `.lfm`-to-C11-skeleton generator (§5.1) to get
-   the widget tree and signal stubs in place before hand-porting handler
-   bodies; `MainWin.pas` and `PlayList.pas` get no benefit from the
-   generator and should be scoped as hand-design work from the start.
-   **Not started** — needs its own planning pass (the design decision
-   above) before work begins.
+5. **GUI**, last, and treated as its own scoped effort per §5. Decided:
+   **GTK2, reproducing the skinned UI exactly** (not GTK3/4, not a
+   simplified standard-widget first cut). For the ~14 standard dialogs,
+   started with the `.lfm`-to-C11-skeleton generator (§5.1, `GtkFixed`
+   layout) to get the widget tree and signal stubs in place before
+   hand-porting handler bodies; `MainWin.pas` and `PlayList.pas` get no
+   benefit from the generator and are scoped as hand-design work from the
+   start. **In progress** — kickoff milestone: a working skinned playback
+   window (skin loading/decompression, window shaping, core playback
+   controls) plus the generator run against two proof-of-concept dialogs;
+   see MIG-0063 through MIG-0067 for exact scope landed vs. still
+   outstanding (metadata display, drag-drop, visualizer, tray/IPC,
+   seeking, the remaining dialogs, `PlayList.pas`). Ongoing, feature-by-
+   feature implementation status is tracked in `PHASE5_GUI_PROGRESS.md`,
+   updated as work lands rather than once at the end.
 
 ### 8.1 The `ay_emul` submodule may be extended with oracle-harness diagnostics — never patched to match the port
 

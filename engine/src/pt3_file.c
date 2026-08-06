@@ -147,6 +147,26 @@ static uint16_t rd16(const uint8_t* d, uint32_t addr) {
   return (uint16_t)(d[addr] | (d[a2] << 8));
 }
 
+/* Copies a fixed-width, space-padded (not NUL-terminated) field, then
+ * trims leading/trailing bytes <= ' ' - see gtr_file.c's identical helper for
+ * the full rationale (duplicated per this project's per-file
+ * convention). */
+static void copy_fixed_field(const uint8_t* src, size_t src_size,
+                              size_t field_offset, size_t field_len,
+                              char* out, size_t cap) {
+  out[0] = '\0';
+  if (cap == 0 || field_offset + field_len > src_size) return;
+  size_t n = field_len;
+  if (n >= cap) n = cap - 1;
+  memcpy(out, src + field_offset, n);
+  out[n] = '\0';
+  while (n > 0 && (unsigned char)out[n - 1] <= ' ') n--;
+  out[n] = '\0';
+  size_t start = 0;
+  while (start < n && (unsigned char)out[start] <= ' ') start++;
+  if (start > 0) memmove(out, out + start, n - start + 1);
+}
+
 /* Players.pas:12304-12322, the GetNoteFreq nested inside PT3_Get_Registers.
  * A 4-way case on PT3_TonTableId (0/1/2/else), NOT a 6-value enum - any id
  * >=3 legitimately falls into the else/REAL family (the real corpus has
@@ -176,6 +196,10 @@ pt3_file_status pt3_file_load(pt3_file* f, const uint8_t* data, size_t size,
   if (size < 202) return PT3_FILE_ERR_TRUNCATED;
   if (size > 65536) size = 65536; /* Players.pas:2253: clamped to 65536 */
   memcpy(f->data, data, size);
+
+  /* Players.pas: "else if FType = FT.PT3" (7405-7427). */
+  copy_fixed_field(f->data, size, 0x1E, 32, f->title, sizeof(f->title));
+  copy_fixed_field(f->data, size, 0x42, 32, f->author, sizeof(f->author));
 
   f->ton_table_id = f->data[99];
 

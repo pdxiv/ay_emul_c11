@@ -25,6 +25,31 @@ static uint16_t rd16(const uint8_t* d, uint32_t addr) {
 
 static uint8_t rb(const uint8_t* d, uint32_t addr) { return d[addr & 0xFFFF]; }
 
+/* Copies a fixed-width, space-padded (not NUL-terminated) field, then
+ * trims leading/trailing bytes <= ' ' - see gtr_file.c's identical
+ * helper for the full rationale (duplicated per this project's
+ * per-file convention). */
+static void copy_fixed_field(const uint8_t* src, size_t src_size,
+                              size_t field_offset, size_t field_len,
+                              char* out, size_t cap) {
+  out[0] = '\0';
+  if (cap == 0 || field_offset + field_len > src_size) return;
+  size_t n = field_len;
+  if (n >= cap) n = cap - 1;
+  memcpy(out, src + field_offset, n);
+  out[n] = '\0';
+  while (n > 0 && (unsigned char)out[n - 1] <= ' ') n--;
+  out[n] = '\0';
+  size_t start = 0;
+  while (start < n && (unsigned char)out[start] <= ' ') start++;
+  if (start > 0) memmove(out, out + start, n - start + 1);
+}
+
+/* Players.pas:954: KsaId = 'KSA SOFTWARE COMPILATION OF ' (28 chars) -
+ * the signature "else if FType = FT.STP" (7498-7530) checks for at
+ * file offset 10 before a title is present at all. */
+static const char STP_KSA_ID[] = "KSA SOFTWARE COMPILATION OF "; /* 28 chars + NUL */
+
 /* ModTypes variant 4 (Players.pas:124-127): STP_Delay@0 (byte)
  * STP_PositionsPointer@1 (word) STP_PatternsPointer@3 (word)
  * STP_OrnamentsPointer@5 (word) STP_SamplesPointer@7 (word)
@@ -39,6 +64,11 @@ stp_file_status stp_file_load(stp_file* f, const uint8_t* data, size_t size,
   if (size > 65536) size = 65536; /* Players.pas:2253: clamped to 65536 */
   memcpy(f->data, data, size);
   int mlen = (int)size;
+
+  /* Players.pas: "else if FType = FT.STP" (7498-7530). */
+  if (size >= 38 && memcmp(f->data + 10, STP_KSA_ID, 28) == 0) {
+    copy_fixed_field(f->data, size, 38, 25, f->title, sizeof(f->title));
+  }
 
   f->delay = f->data[0];
   f->positions_pointer = rd16(f->data, 1);

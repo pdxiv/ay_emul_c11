@@ -23,14 +23,17 @@
  *    with the same deferred-write-across-buffer-boundary handling
  *    (int_flag/int_beeper/int_ay) already implemented in engine/ay.c's
  *    mixer functions.
+ *  - Author/title/comment string extraction (OpenAYFile's AuthorString/
+ *    MiscString/SongName relative-pointer walk, Players.pas:7154-7184) -
+ *    added for the Phase 5 GUI (song metadata display), see f->author/
+ *    f->title/f->comment below. Stored as raw, untranscoded bytes -
+ *    CP1251->UTF-8 conversion for display is a GUI-layer concern (see
+ *    gui/src/playback.c), not done here.
  *
  * Deliberately not ported here (see migration_debt.yaml):
  *  - AMAD (FT.FXM) / ST11 (FT.ST1) TypeIDs - different formats, out of
  *    scope for this milestone (only the real files in songs/ are in
  *    scope, and Discmac20_0.ay is TypeID "EMUL").
- *  - Author/title/comment string extraction (OpenAYFile's AuthorString/
- *    MiscString/SongName walk) - GUI playlist metadata, irrelevant to
- *    correct audio playback.
  *  - FadeLength-based fade-out at song end - a cosmetic playback detail,
  *    not needed for correct core audio (loop/end-of-song still works via
  *    SongLength alone, matching PlayList.pas:722's Global_Tick_Max source).
@@ -75,6 +78,22 @@ typedef struct ay_file {
                       * ay_file_set_chip_freq's Delay_In_Tiks recompute
                       * when z80_bus's on_chip_freq_change callback fires
                       * mid-song (CPC-protocol auto-detect). */
+
+  int song_count;   /* data[16]+1 (TAYFileHeader.NumOfSongs, 0-based max
+                      * valid song_index) - a GUI-facing addition (Phase 5
+                      * kickoff), not present in the original Pascal as a
+                      * distinct getter; real OpenAYFile just iterates
+                      * 0..NumOfSongs when building playlist entries
+                      * (Players.pas), which is exactly what this exposes
+                      * for a caller that wants to offer song selection. */
+
+  /* Raw (untranscoded CP1251) author/per-song-title/comment strings -
+   * empty if the file has none (e.g. no PAuthor pointer, or it points
+   * past EOF - matches OpenAYFile's own "just get an empty string"
+   * behavior on a malformed/absent pointer, no special error path). */
+  char author[256];
+  char title[256];
+  char comment[256];
 } ay_file;
 
 /* Parses `data`/`size` (the whole .ay file's bytes) and sets up f->bus /

@@ -165,20 +165,26 @@ ym_file_status ym_file_load(ym_file* f, const uint8_t* data, size_t size,
      * for pre-converted/YM-native-encoded samples only. */
   }
 
-  /* Title/Author/Comment: 3 null-terminated strings; k ends up at
-   * VTX_Offset (Players.pas:7791-7809). We don't need the string content,
-   * only where it ends. */
+  /* Title/Author/Comment: 3 null-terminated strings, in that order
+   * (Players.pas:7791-7809); k ends up at VTX_Offset. */
   {
+    char* const dests[3] = {f->title, f->author, f->comment};
+    const size_t dest_caps[3] = {sizeof(f->title), sizeof(f->author),
+                                  sizeof(f->comment)};
     int str;
     for (str = 0; str < 3; str++) {
+      size_t n = 0;
       for (;;) {
         k++;
         if ((size_t)k > payload_size) {
           ym_file_free(f);
           return YM_FILE_ERR_TRUNCATED;
         }
-        if (payload[k - 1] == 0) break;
+        uint8_t ch = payload[k - 1];
+        if (ch == 0) break;
+        if (n + 1 < dest_caps[str]) dests[str][n++] = (char)ch;
       }
+      dests[str][n] = '\0';
     }
   }
   f->vtx_offset = k;
