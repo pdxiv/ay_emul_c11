@@ -69,9 +69,10 @@ typedef struct gui_playback {
   atomic_int_least64_t frames_played;
   double volume; /* 0.0-1.0, see file comment on its threading model */
 
-  /* Seeking (Players.pas: RerollMusic, MIG-0079) - only meaningful for
-   * formats player_get_tick_position() supports (AY/YM/VTX - see its
-   * own comment for exactly why only these three). `seek_target_tick`
+  /* Seeking (Players.pas: RerollMusic, MIG-0079/MIG-0100/MIG-0101) -
+   * only meaningful for formats player_get_tick_position() supports
+   * (AY/YM/VTX/SNDH/PT3 - see its own comment for exactly why only
+   * these five so far). `seek_target_tick`
    * is set by the GTK thread before `seek_requested`; the playback
    * thread picks it up at the top of its loop (so a seek works whether
    * or not playback is currently paused) and performs the actual
@@ -114,9 +115,10 @@ double gui_playback_position_seconds(const gui_playback* pb);
 
 /* True (with `*fraction` in [0,1]) if the loaded format has a known
  * fixed duration to compute real playback progress from
- * (player_get_tick_position() - AY/YM/VTX only, see its own comment).
- * False otherwise - the caller should fall back to a cosmetic sweep
- * (see gui/src/mainwin.c's on_timer, unchanged for every other format). */
+ * (player_get_tick_position() - AY/YM/VTX/SNDH/PT3 so far, see its own
+ * comment). False otherwise - the caller should fall back to a
+ * cosmetic sweep (see gui/src/mainwin.c's on_timer, unchanged for
+ * every other format). */
 bool gui_playback_get_progress_fraction(const gui_playback* pb,
                                          double* fraction);
 

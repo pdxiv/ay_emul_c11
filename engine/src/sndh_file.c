@@ -42,10 +42,24 @@ static uint32_t be32(const uint8_t* p) {
 
 /* sndh.pas:598-835's tag scan, narrowed to playback-relevant fields -
  * see sndh_file.h's file comment for exactly what's skipped and why. */
+#define SNDH_MAX_TIME_SONGS 64 /* real files have a handful of songs;
+                                 * this just bounds storage, matching
+                                 * SNDH_MAX_TIME_SONGS-or-fewer songs
+                                 * being read - excess songs' TIME
+                                 * entries are skipped over (bytes
+                                 * still consumed correctly) but not
+                                 * retained, same as this port's
+                                 * existing "single/few-song" scope
+                                 * (sndh_file.h's own file comment). */
+
 typedef struct sndh_tags {
   int number_of_songs;
   int current_song;
   int play_freq;
+  int time_raw[SNDH_MAX_TIME_SONGS]; /* sndh.pas: GetTunesTime's
+                                       * PlayTimes[] - raw per-song
+                                       * seconds from the TIME tag, 0
+                                       * where absent/not retained. */
 } sndh_tags;
 
 static void parse_tags(const uint8_t* data, uint32_t size, sndh_tags* tags) {
@@ -55,6 +69,7 @@ static void parse_tags(const uint8_t* data, uint32_t size, sndh_tags* tags) {
   tags->number_of_songs = 1;
   tags->current_song = 1;
   tags->play_freq = 50;
+  memset(tags->time_raw, 0, sizeof(tags->time_raw));
 
   if (size < 32) return;
   if (be32(data + 12) != 0x534E4448u) return; /* "SNDH" */
@@ -79,8 +94,18 @@ static void parse_tags(const uint8_t* data, uint32_t size, sndh_tags* tags) {
       continue;
     }
     if (tag_dw == 0x54494D45u /* "TIME" */) {
-      /* Per-song duration table (2 bytes/song) - unused, just skip. */
-      hd_pos += (uint32_t)tags->number_of_songs * 2;
+      /* Per-song duration table (2 bytes/song, big-endian raw seconds -
+       * sndh.pas: GetTunesTime). Retained now (MIG-0100) - see
+       * sndh_file.h's file comment for why this isn't UI-only after
+       * all. */
+      int n = tags->number_of_songs;
+      int i;
+      for (i = 0; i < n; i++) {
+        uint32_t off = hd_pos + (uint32_t)i * 2;
+        if (off + 2 > max_header) break;
+        if (i < SNDH_MAX_TIME_SONGS) tags->time_raw[i] = be16(data + off);
+      }
+      hd_pos += (uint32_t)n * 2;
       continue;
     }
     if (tag_dw == 0x214E5323u /* "!NS#" (sndh__nSN) */ ||
@@ -327,8 +352,22 @@ sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
   atari_emulate_init(&f->atari, f->mem, mem_size, &f->ay, mc68000_freq,
                       vbl_period, ay_freq);
   f->atari.do_loop = false;
-  f->atari.tick_count_max = 0x7FFFFFFF; /* no real duration - see file
-                                         * comment; caller may override. */
+  f->play_freq = tags.play_freq;
+  {
+    /* Players.pas:7112-7115 / sndh.pas:819-821 ("переводим в VBL" -
+     * "convert to VBL"): PlayTimes[song] is raw seconds off the TIME
+     * tag; multiply by PlayFreq to get the VBL tick count Global_Tick_
+     * Max/tick_count_max is measured in, falling back to a 5-minute
+     * default (`PlayFreq * 300`) when the tag is absent or the song's
+     * own entry is 0 (MIG-0100). */
+    int idx = tags.current_song - 1;
+    int raw_seconds =
+        (idx >= 0 && idx < SNDH_MAX_TIME_SONGS) ? tags.time_raw[idx] : 0;
+    int64_t total_vbl = raw_seconds != 0
+                             ? (int64_t)raw_seconds * tags.play_freq
+                             : (int64_t)tags.play_freq * 300;
+    f->atari.tick_count_max = total_vbl > 0 ? total_vbl : 0x7FFFFFFF;
+  }
 
   /* atari.pas: Atari_PrepEmu's `s68000context.dreg[0] := CurrentSong;`
    * (D0 = 1-based current song index; PrepareToPlay's SNDH branch always

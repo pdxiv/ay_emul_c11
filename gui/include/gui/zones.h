@@ -17,10 +17,22 @@
  *  - Sliders (TMoveZone) are ported here as plain horizontal 0..1 value
  *    sliders - MoveVol/MoveProgr/MoveWin are all horizontal in the
  *    original too (confirmed from their actual Create() call sites,
- *    MainWin.pas:3331-3334), so this isn't a simplification of
- *    orientation, only of the thumb's exact drawn shape (the original's
- *    TMoveZone.AddBitmaps composites a separate thumb bitmap on top of
- *    the track; this port draws a plain filled rectangle thumb for M1).
+ *    MainWin.pas:3331-3334). The thumb is now the real skin bitmap
+ *    (TMoveZone.AddBitmaps, MainWin.pas:3813-3814 - color-keyed on the
+ *    source rect's own (0,0) pixel, matching TransparentMode=tmFixed),
+ *    and press/drag now replicate FormMouseDown/FormMouseMove's actual
+ *    two-mode behavior (MIG-0099): clicking directly on the thumb
+ *    starts a relative/delta drag that follows the mouse from wherever
+ *    it was grabbed; clicking elsewhere in the track jumps the thumb to
+ *    be centered under the click point first (MainWin.pas:2140-2144's
+ *    `OfsR := X - zx - bm1w div 2`). Travel range is the real
+ *    `zw - Bm1w` (0 to track-width-minus-handle-width), not an assumed
+ *    fixed thumb width. Not replicated: the original's own OldX/Delt
+ *    edge-clamp quirk (MainWin.pas:2294-2303's `p1^.OldX := p1^.Delt`
+ *    on hitting the low clamp) - a standard delta-clamp is used
+ *    instead, which is behaviorally equivalent for normal dragging and
+ *    only differs in an obscure edge case (dragging past the track
+ *    edge and back without releasing).
  */
 #ifndef GUI_ZONES_H
 #define GUI_ZONES_H
@@ -61,16 +73,20 @@ typedef struct gui_led {
 
 void gui_led_draw(const gui_led* led, cairo_t* cr, GdkPixbuf* skin);
 
-/* TMoveZone equivalent (MainWin.pas:153-168), simplified to a plain
- * horizontal slider (see file comment). `value` is 0.0-1.0. Callers
- * update `value` from pointer-motion events via
- * gui_hslider_value_from_x while `dragging` is true (set on button-press
- * inside the track, cleared on button-release - the caller's GTK event
- * handlers own that state transition, this struct just holds it). */
+/* TMoveZone equivalent (MainWin.pas:153-168). `value` is 0.0-1.0 (the
+ * TMoveZone::PosX pixel offset, normalized by travel range `w -
+ * thumb_w`) and remains the single source of truth callers (volume/
+ * seek) read - see file comment for the drag semantics this now
+ * replicates and the one deliberate simplification kept. */
 typedef struct gui_hslider {
-  int x, y, w, h; /* track rect */
+  int x, y, w, h; /* track rect (zx,zy,zw,zh) */
+  int thumb_w, thumb_h;         /* Bm1w/Bm1h - handle bitmap size */
+  int thumb_src_x, thumb_src_y; /* handle bitmap's source rect top-left
+                                  * in the skin (AddBitmaps' x1,y1) */
   double value;   /* 0.0-1.0 */
   bool dragging;
+  int drag_anchor_x; /* MainWin.pas: OldX - local x of the last press/
+                       * motion event, for the next frame's delta */
   gui_zone_click_cb on_change; /* called on every value update while
                                  * dragging, same as the original's
                                  * Action/DoMovingVol/DoMovingProgr
@@ -78,12 +94,24 @@ typedef struct gui_hslider {
   void* userdata;
 } gui_hslider;
 
+/* Whole-track hit test (TMoveZone.Touche, minus its narrower zy1/zh1
+ * vertical sub-band - kept as a deliberately more forgiving simplification,
+ * unchanged from before this entry). Gates whether a press interacts
+ * with this slider at all. */
 bool gui_hslider_hit_test(const gui_hslider* s, int mx, int my);
-/* Clamps to [0,1]; caller is responsible for calling on_change if it
- * wants one fired (gui_hslider itself never calls it, so a read-only
- * slider like M1's progress display can reuse this for hit-testing
- * without accidentally becoming draggable - see mainwin.c). */
-double gui_hslider_value_from_x(const gui_hslider* s, int mx);
-void gui_hslider_draw(const gui_hslider* s, cairo_t* cr);
+
+/* MainWin.pas: FormMouseDown's MoveZoneRoot walk (2126-2164). Call once
+ * gui_hslider_hit_test has already confirmed the press is inside this
+ * slider's track. Starts a drag; if the press landed on the handle
+ * itself, it's a relative follow-the-mouse drag from here, otherwise
+ * the handle immediately jumps to be centered under the click (matching
+ * the original exactly) before the drag starts. */
+void gui_hslider_press(gui_hslider* s, int mx);
+
+/* MainWin.pas: FormMouseMove's MoveZoneRoot walk (2285-2321). Call on
+ * every motion event while `dragging` is true. */
+void gui_hslider_drag(gui_hslider* s, int mx);
+
+void gui_hslider_draw(const gui_hslider* s, cairo_t* cr, GdkPixbuf* skin);
 
 #endif /* GUI_ZONES_H */

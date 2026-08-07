@@ -187,6 +187,170 @@ static int get_note_freq(pt3_file* f, int j) {
   }
 }
 
+/* Players.pas:15353-15612, GetTimePT3's PatInt nested function - one
+ * channel's per-row scan. `check_end` is true only for channel A: it
+ * alone detects "no more pattern data" (a raw 0 byte) and signals the
+ * caller to stop the whole row-walk for THIS position (move on to the
+ * next position in the outer loop) - matching the original exactly
+ * (channels B/C have no such check: PatInt's own source has no `if
+ * Index[j2/j3]=0 then exit` for them, only channel A's `if Index[j1]=0
+ * then exit` - well-formed pattern data never needs it for B/C since
+ * they always terminate via a normal note/rest opcode within the same
+ * row A does). PT3_TIME_STEP_ERROR signals a malformed file (a payload
+ * read pushed past the 65536-byte data buffer - Players.pas' own `if
+ * j1 >= 65536 then RaiseBadFileStructure` bounds check, in the one
+ * place it exists; the first opcode-consuming scan below has none
+ * either in the original, so none is added here). `b` (shared tempo/
+ * delay) is mutated in place exactly as the original's closure over
+ * its own outer `b` variable does. */
+typedef enum {
+  PT3_TIME_STEP_CONTINUE,
+  PT3_TIME_STEP_END_OF_POSITION,
+  PT3_TIME_STEP_ERROR,
+} pt3_time_step_result;
+
+static pt3_time_step_result pt3_time_channel_step(const uint8_t* d,
+                                                    uint32_t* j, int* a,
+                                                    int* a1x, int* b,
+                                                    bool check_end) {
+  int jj, c1, c2, c3, c4, c5, c8;
+
+  (*a)--;
+  if (*a != 0) return PT3_TIME_STEP_CONTINUE;
+  if (check_end && d[*j] == 0) return PT3_TIME_STEP_END_OF_POSITION;
+
+  jj = c1 = c2 = c3 = c4 = c5 = c8 = 0;
+  for (;;) {
+    uint8_t op = d[*j];
+    if (op == 0xd0 || op == 0xc0 || (op >= 0x50 && op <= 0xaf)) {
+      *a = *a1x;
+      (*j)++;
+      break;
+    } else if (op == 0x10 || op >= 0xf0) {
+      (*j)++;
+    } else if (op >= 0xb2 && op <= 0xbf) {
+      *j += 2;
+    } else if (op == 0xb1) {
+      (*j)++;
+      *a1x = d[*j];
+    } else if (op >= 0x11 && op <= 0x1f) {
+      *j += 3;
+    } else if (op == 1) {
+      jj++;
+      c1 = jj;
+    } else if (op == 2) {
+      jj++;
+      c2 = jj;
+    } else if (op == 3) {
+      jj++;
+      c3 = jj;
+    } else if (op == 4) {
+      jj++;
+      c4 = jj;
+    } else if (op == 5) {
+      jj++;
+      c5 = jj;
+    } else if (op == 8) {
+      jj++;
+      c8 = jj;
+    } else if (op == 9) {
+      jj++;
+    }
+    (*j)++;
+  }
+  while (jj > 0) {
+    if (jj == c1 || jj == c8) {
+      *j += 3;
+    } else if (jj == c2) {
+      *j += 5;
+    } else if (jj == c3 || jj == c4) {
+      *j += 1;
+    } else if (jj == c5) {
+      *j += 2;
+    } else {
+      *b = d[*j];
+      (*j)++;
+    }
+    if (*j >= 65536) return PT3_TIME_STEP_ERROR;
+    jj--;
+  }
+  return PT3_TIME_STEP_CONTINUE;
+}
+
+/* Players.pas:15333-15662, GetTimePT3 - computes the song's total
+ * duration and loop-point tick in the SAME "global tick" units
+ * global_tick_counter uses: it walks the known position list exactly
+ * once, summing each processed row's Delay value, matching one
+ * increment of global_tick_counter per row (pt3_get_registers
+ * increments it once per interrupt frame, and a row's note-skip
+ * counters gate how many frames elapse before the next row - the sum
+ * of Delay values across all rows equals the total frame count).
+ * TSMode (turbosound - the original's `vars[1]`/second-chip half) is
+ * not simulated, matching this port's existing single-chip PT3 scope
+ * (MIG-0007) - equivalent to the original's own `TS = $20` case, so
+ * only the chip-0 (`vars[0]`) logic is transcribed. On a malformed
+ * file (a bounds violation, or a pathologically long position tripping
+ * the same 65536-row DLCatcher safety net the original has), returns
+ * 0/0 rather than raising - this port's `pt3_file_load` already
+ * succeeded by the time this runs (a well-formed-enough file for the
+ * real player to interpret), so a duration-precompute failure degrades
+ * to "no known duration" (seeking/natural-end unavailable) rather than
+ * failing the whole load, unlike the original's own
+ * RaiseBadFileStructure->Error=ErBadFileStructure. */
+static void pt3_get_time(const pt3_file* f, int64_t* out_tm,
+                          int64_t* out_lp) {
+  const uint8_t* d = f->data;
+  int64_t tm = 0, lp = 0;
+  int b = f->delay;
+  int pos;
+
+  for (pos = 0; pos < f->number_of_positions; pos++) {
+    int pat, a1 = 1, a2 = 1, a3 = 1, a11 = 1, a22 = 1, a33 = 1;
+    uint32_t j1, j2, j3;
+    int dl_catcher = 256 * 256; /* max 256 patterns * 256 lines/pattern */
+
+    if (pos == f->loop_position) lp = tm;
+
+    pat = d[f->position_list_offset + (uint32_t)pos];
+    j1 = rd16(d, f->patterns_pointer + (uint32_t)pat * 2);
+    j2 = rd16(d, f->patterns_pointer + (uint32_t)pat * 2 + 2);
+    j3 = rd16(d, f->patterns_pointer + (uint32_t)pat * 2 + 4);
+
+    for (;;) {
+      pt3_time_step_result ra =
+          pt3_time_channel_step(d, &j1, &a1, &a11, &b, true);
+      if (ra == PT3_TIME_STEP_ERROR) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+      if (ra == PT3_TIME_STEP_END_OF_POSITION) break; /* next position */
+
+      if (pt3_time_channel_step(d, &j2, &a2, &a22, &b, false) ==
+          PT3_TIME_STEP_ERROR) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+      if (pt3_time_channel_step(d, &j3, &a3, &a33, &b, false) ==
+          PT3_TIME_STEP_ERROR) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+
+      tm += b;
+      if (--dl_catcher < 0) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+    }
+  }
+  *out_tm = tm;
+  *out_lp = lp;
+}
+
 pt3_file_status pt3_file_load(pt3_file* f, const uint8_t* data, size_t size,
                                int sample_rate) {
   int i;
@@ -269,6 +433,9 @@ pt3_file_status pt3_file_load(pt3_file* f, const uint8_t* data, size_t size,
   f->chan_c.note_skip_counter = 1;
 
   f->global_tick_counter = 0;
+  f->do_loop = false;
+  f->real_end_all = false;
+  pt3_get_time(f, &f->global_tick_max, &f->loop_tick); /* MIG-0101 */
 
   return PT3_FILE_OK;
 }
@@ -657,6 +824,21 @@ int pt3_file_make_buffer(pt3_file* f, int16_t* buf, int buffer_length) {
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
+    /* Players.pas: PT3_Get_Registers's own first statement, `if
+     * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
+     * MIG-0101) - equivalent here since nothing else touches
+     * global_tick_counter between one pt3_get_registers call ending
+     * and the next one starting. Force_Loop (the original's TS-pair
+     * "continue playback of the shorter module" case) doesn't apply -
+     * TSMode isn't ported (MIG-0007), so only Do_Loop matters. */
+    if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
+      if (f->do_loop) {
+        f->global_tick_counter = f->global_tick_max;
+      } else {
+        f->real_end_all = true;
+        break;
+      }
+    }
     pt3_get_registers(f);
     /* AY.pas:1075-1082 SynthesizerZX50. */
     if (!ay->int_flag) {

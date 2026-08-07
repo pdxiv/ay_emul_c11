@@ -3,17 +3,23 @@
  * status, not this comment - it goes stale, the tracker doesn't).
  *
  * The progress slider (MoveProgr) is draggable/seekable (real position,
- * not a cosmetic sweep) only for AY/YM/VTX - see MIG-0079 and
- * gui_playback_get_progress_fraction's own comment for exactly why only
- * those three; every other format keeps the pre-MIG-0079 cosmetic
- * repeating sweep, since it has no declared song length to seek within.
+ * not a cosmetic sweep) for AY/YM/VTX/SNDH/PT3 - see MIG-0079/MIG-0100/
+ * MIG-0101 and gui_playback_get_progress_fraction's own comment for
+ * exactly why only those five; every other format keeps the pre-
+ * MIG-0079 cosmetic repeating sweep for now. NOTE: unlike the other
+ * nine (PT1/PT2/GTR/FLS/STC/STP/FXM/PSM/ASC/ASC0/FTC/PSC/SQT - 13
+ * formats), this is NOT because they lack a declared song length in
+ * the original - MIG-0101 found ALL of them are real Pascal
+ * `type=AY` formats with their own GetTimeXXX duration precompute,
+ * same as PT3; porting the rest is open, tracked work (migration_debt.
+ * yaml MIG-0101), not a settled scope decision.
  *
  * Explicitly DEFERRED, not silently dropped (see migration_debt.yaml
  * and PHASE5_GUI_PROGRESS.md for the authoritative, up-to-date list):
  * visualizer (spectrum/oscilloscope - TSensZone entirely unported,
  * blocked on BASS/FFT being out of this port's scope), ButTools (its
  * destination window, Tools.pas, doesn't exist - MIG-0069), seeking/
- * duration for the 14 formats without a declared song length.
+ * duration for the 13 remaining `type=AY` tracker formats (MIG-0101).
  */
 #include "gui/mainwin.h"
 
@@ -96,10 +102,15 @@ static void init_zones(gui_mainwin* mw) {
   mw->led_stereo.state = true; /* output is always stereo16 - see file
                                  * comment */
 
-  /* MoveVol/MoveProgr, MainWin.pas:3333-3334. */
+  /* MoveVol/MoveProgr, MainWin.pas:3333-3334; handle bitmap size/source
+   * from their own AddBitmaps calls (MainWin.pas:3813-3814). */
   mw->vol_slider = (gui_hslider){.x = 237, .y = 22, .w = 70, .h = 12,
+                                  .thumb_w = 18, .thumb_h = 11,
+                                  .thumb_src_x = 358 - 41, .thumb_src_y = 113,
                                   .value = 1.0};
   mw->progr_slider = (gui_hslider){.x = 96, .y = 83, .w = 159, .h = 10,
+                                    .thumb_w = 20, .thumb_h = 10,
+                                    .thumb_src_x = 0, .thumb_src_y = 103,
                                     .value = 0.0};
 
   /* MoveWin, MainWin.pas:3331-3332. */
@@ -138,9 +149,10 @@ static gboolean on_expose(GtkWidget* widget, GdkEventExpose* event,
   gui_led_draw(&mw->led_ay, cr, mw->skin.bitmap);
   gui_led_draw(&mw->led_ym, cr, mw->skin.bitmap);
   gui_led_draw(&mw->led_stereo, cr, mw->skin.bitmap);
-  gui_hslider_draw(&mw->vol_slider, cr);
-  gui_hslider_draw(&mw->progr_slider, cr);
+  gui_hslider_draw(&mw->vol_slider, cr, mw->skin.bitmap);
+  gui_hslider_draw(&mw->progr_slider, cr, mw->skin.bitmap);
   gui_visualizer_draw(&mw->vis, cr);
+  gui_ticker_draw(&mw->ticker, cr, mw->skin.bitmap);
 
   cairo_destroy(cr);
   return FALSE;
@@ -245,6 +257,27 @@ static void do_load_song(gui_mainwin* mw, const char* path, int song_index,
       snprintf(title, sizeof(title), "ay_emul_c11 - %s", mw->playback.title);
     }
     gtk_window_set_title(GTK_WINDOW(mw->window), title);
+
+    /* MIG-0098: PlayList.pas's PlayItem setting `Scroll_Distination :=
+     * Index` (~657) - gui_playlist_win's own model.current already IS
+     * that index by the time do_load_song runs here (fire_play sets it
+     * before invoking on_playlist_play), for every load path (Open,
+     * playlist double-click, Next/Prev, and the loop-restart call
+     * below all funnel through the playlist model - see gui_playlist_
+     * win_replace_with_path's own comment). model.items[idx].display
+     * already reflects ItemEdit override precedence (gui_playlist_
+     * entry_refresh_display), matching this exact function's own
+     * disp_author/disp_title precedence above, so it's reused directly
+     * rather than reformatted a third time. */
+    int idx = mw->plwin.model.current;
+    const char* ticker_text =
+        (idx >= 0 && idx < mw->plwin.model.count)
+            ? mw->plwin.model.items[idx].display
+            : mw->playback.title;
+    bool is_next = mw->ticker_last_index >= 0 && idx == mw->ticker_last_index + 1;
+    bool is_prev = mw->ticker_last_index >= 0 && idx == mw->ticker_last_index - 1;
+    gui_ticker_set_target(&mw->ticker, ticker_text, is_next, is_prev);
+    mw->ticker_last_index = idx;
   } else {
     fprintf(stderr, "gui: failed to load or open audio for '%s' (song %d)\n",
             path, song_index);
@@ -320,35 +353,60 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event,
   gui_mainwin* mw = (gui_mainwin*)data;
   int x = (int)event->x, y = (int)event->y;
 
+  /* MainWin.pas:2092-2098 - double-click ANYWHERE in the ticker rect
+   * toggles Do_Scroll, checked first/exclusively (the original's own
+   * `if ssDouble in Shift then ... Exit;` at the very top of
+   * FormMouseDown, before any zone routing). */
+  if (event->type == GDK_2BUTTON_PRESS && x >= GUI_TICKER_X &&
+      x < GUI_TICKER_X + GUI_TICKER_WIDTH && y >= GUI_TICKER_Y &&
+      y < GUI_TICKER_Y + GUI_TICKER_LINE_HEIGHT) {
+    gui_ticker_toggle_scroll(&mw->ticker);
+    gtk_widget_queue_draw(widget);
+    return TRUE;
+  }
+
   if (gui_button_hit_test(&mw->but_play, x, y)) {
     mw->but_play.is_pushed = true;
+    mw->pressed_button = &mw->but_play;
   } else if (gui_button_hit_test(&mw->but_pause, x, y)) {
     mw->but_pause.is_pushed = true;
+    mw->pressed_button = &mw->but_pause;
   } else if (gui_button_hit_test(&mw->but_stop, x, y)) {
     mw->but_stop.is_pushed = true;
+    mw->pressed_button = &mw->but_stop;
   } else if (gui_button_hit_test(&mw->but_open, x, y)) {
     mw->but_open.is_pushed = true;
+    mw->pressed_button = &mw->but_open;
   } else if (gui_button_hit_test(&mw->but_min, x, y)) {
     mw->but_min.is_pushed = true;
+    mw->pressed_button = &mw->but_min;
   } else if (gui_button_hit_test(&mw->but_close, x, y)) {
     mw->but_close.is_pushed = true;
+    mw->pressed_button = &mw->but_close;
   } else if (gui_button_hit_test(&mw->but_prev, x, y)) {
     mw->but_prev.is_pushed = true;
+    mw->pressed_button = &mw->but_prev;
   } else if (gui_button_hit_test(&mw->but_next, x, y)) {
     mw->but_next.is_pushed = true;
+    mw->pressed_button = &mw->but_next;
   } else if (gui_button_hit_test(&mw->but_loop, x, y)) {
     mw->but_loop.is_pushed = true;
+    mw->pressed_button = &mw->but_loop;
   } else if (gui_button_hit_test(&mw->but_about, x, y)) {
     mw->but_about.is_pushed = true;
+    mw->pressed_button = &mw->but_about;
   } else if (gui_button_hit_test(&mw->but_list, x, y)) {
     mw->but_list.is_pushed = true;
+    mw->pressed_button = &mw->but_list;
   } else if (gui_button_hit_test(&mw->but_mixer, x, y)) {
     mw->but_mixer.is_pushed = true;
+    mw->pressed_button = &mw->but_mixer;
   } else if (gui_button_hit_test(&mw->but_tools, x, y)) {
     mw->but_tools.is_pushed = true;
+    mw->pressed_button = &mw->but_tools;
   } else if (gui_hslider_hit_test(&mw->vol_slider, x, y)) {
     mw->dragging_vol = true;
-    mw->vol_slider.value = gui_hslider_value_from_x(&mw->vol_slider, x);
+    gui_hslider_press(&mw->vol_slider, x);
     if (mw->file_loaded)
       gui_playback_set_volume(&mw->playback, mw->vol_slider.value);
   } else if (mw->file_loaded &&
@@ -356,7 +414,7 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event,
     double frac;
     if (gui_playback_get_progress_fraction(&mw->playback, &frac)) {
       mw->dragging_progr = true;
-      mw->progr_slider.value = gui_hslider_value_from_x(&mw->progr_slider, x);
+      gui_hslider_press(&mw->progr_slider, x);
       gui_playback_request_seek(&mw->playback, mw->progr_slider.value);
     } /* else: no known duration for this format (see playback.h's own
        * comment) - the slider stays the cosmetic, non-interactive
@@ -365,11 +423,28 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event,
     /* MainWin.pas: ButSpaClick/ButAmpClick (MIG-0094) - toggled
      * already inside gui_visualizer_handle_click; nothing else to do
      * here besides the queue_draw every branch falls through to. */
+  } else if (x >= GUI_TICKER_X && x < GUI_TICKER_X + GUI_TICKER_WIDTH &&
+             y >= GUI_TICKER_Y && y < GUI_TICKER_Y + GUI_TICKER_LINE_HEIGHT) {
+    /* MainWin.pas: MoveScr's own single-click press (a single click,
+     * not the double-click handled above) - starts a manual scrub
+     * drag, see on_motion/gui_ticker_drag. */
+    mw->ticker_dragging = true;
+    mw->ticker.dragging = true;
+    mw->ticker_drag_last_x = x;
   } else if (x >= mw->drag_x && x < mw->drag_x + mw->drag_w &&
              y >= mw->drag_y && y < mw->drag_y + mw->drag_h) {
-    gdk_window_begin_move_drag(gtk_widget_get_window(widget), event->button,
-                                (int)event->x_root, (int)event->y_root,
-                                event->time);
+    /* gdk_window_begin_move_drag sends a _NET_WM_MOVERESIZE client
+     * message the window manager expects to target the TOPLEVEL
+     * window - `widget` here is mw->area (a GtkDrawingArea, which has
+     * its own child GdkWindow nested inside the toplevel's, even
+     * though it visually fills the whole thing), so passing its
+     * window instead of mw->window's own toplevel GdkWindow silently
+     * no-ops on WMs that don't walk up to find a real toplevel
+     * themselves - this was why dragging the title strip did nothing
+     * at all (a real bug, not a documented simplification). */
+    gdk_window_begin_move_drag(gtk_widget_get_window(mw->window),
+                                event->button, (int)event->x_root,
+                                (int)event->y_root, event->time);
   }
   gtk_widget_queue_draw(widget);
   return TRUE;
@@ -382,11 +457,26 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event,
 
   if (mw->but_play.is_pushed) {
     mw->but_play.is_pushed = false;
-    if (mw->file_loaded) gui_playback_play(&mw->playback);
+    /* MainWin.pas:952-961 - PlayClick's `if IsPlaying then Exit;` -
+     * Play is a no-op once a play session is active, including while
+     * paused (IsPlaying stays true across a pause; only the Pause
+     * button itself resumes - MainWin.pas doesn't set/clear IsPlaying
+     * anywhere in ButPauseClick). Previously this port let a Play press
+     * during pause silently resume playback too, a second-order variant
+     * of MIG-0100's pause/stop bug found while auditing this logic. */
+    if (mw->file_loaded && !mw->playback.thread_started)
+      gui_playback_play(&mw->playback);
   }
   if (mw->but_pause.is_pushed) {
     mw->but_pause.is_pushed = false;
-    if (mw->file_loaded) {
+    /* MainWin.pas:971-975 - `if not IsPlaying then begin ButPause.
+     * UnPush; exit; end;` - pausing while stopped is a no-op, not "start
+     * playback". Real bug fixed here (MIG-0100): this guard was missing
+     * entirely, so pressing Pause while stopped set paused=true with no
+     * playback thread running to observe it; the NEXT Pause press then
+     * saw gui_playback_is_paused() return that stale true and called
+     * gui_playback_play(), starting the song from a dead stop. */
+    if (mw->file_loaded && mw->playback.thread_started) {
       if (gui_playback_is_paused(&mw->playback))
         gui_playback_play(&mw->playback);
       else
@@ -454,6 +544,9 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event,
       gui_playback_request_seek(&mw->playback, mw->progr_slider.value);
   }
   mw->dragging_vol = false;
+  mw->pressed_button = NULL;
+  mw->ticker_dragging = false;
+  mw->ticker.dragging = false;
   gtk_widget_queue_draw(widget);
   return TRUE;
 }
@@ -461,15 +554,32 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event,
 static gboolean on_motion(GtkWidget* widget, GdkEventMotion* event,
                            gpointer data) {
   gui_mainwin* mw = (gui_mainwin*)data;
+  if (mw->pressed_button) {
+    /* MainWin.pas: FormMouseMove's ButtZoneRoot walk (2276-2282) - see
+     * mainwin.h's own comment on pressed_button. */
+    mw->pressed_button->is_pushed =
+        gui_button_hit_test(mw->pressed_button, (int)event->x, (int)event->y);
+    gtk_widget_queue_draw(widget);
+  }
+  if (mw->ticker_dragging) {
+    int x = (int)event->x;
+    gui_ticker_drag(&mw->ticker, x - mw->ticker_drag_last_x);
+    mw->ticker_drag_last_x = x;
+    gtk_widget_queue_draw(widget);
+  }
   if (mw->dragging_progr) {
-    mw->progr_slider.value =
-        gui_hslider_value_from_x(&mw->progr_slider, (int)event->x);
+    gui_hslider_drag(&mw->progr_slider, (int)event->x);
     if (mw->file_loaded)
       gui_playback_request_seek(&mw->playback, mw->progr_slider.value);
+    gtk_widget_queue_draw(widget); /* immediate feedback - previously
+                                     * missing here (unlike the vol_slider
+                                     * branch below), so the thumb only
+                                     * caught up on the next ~30ms vis-
+                                     * timer tick during a drag, real gap
+                                     * found and fixed alongside MIG-0099 */
   }
   if (mw->dragging_vol) {
-    mw->vol_slider.value = gui_hslider_value_from_x(&mw->vol_slider,
-                                                      (int)event->x);
+    gui_hslider_drag(&mw->vol_slider, (int)event->x);
     if (mw->file_loaded)
       gui_playback_set_volume(&mw->playback, mw->vol_slider.value);
     gtk_widget_queue_draw(widget);
@@ -487,6 +597,9 @@ static gboolean on_vis_timer(gpointer data) {
                      ? (uint32_t)atomic_load(&mw->playback.frames_played)
                      : 0;
   gui_visualizer_tick(&mw->vis, engine, smp);
+  gui_ticker_tick(&mw->ticker); /* MainWin.pas: DoVisualisation also
+                                  * drives the scroll ticker, same
+                                  * 30ms VisTimer - see ticker.h */
   gtk_widget_queue_draw(mw->area);
   return TRUE;
 }
@@ -520,6 +633,28 @@ static gboolean on_timer(gpointer data) {
     mw->led_ay.state = (ct == AY_CHIP_TYPE_AY);
     mw->led_ym.state = (ct == AY_CHIP_TYPE_YM);
 
+    /* MainWin.pas: PlayCurrent's `ButPlay.Switch_On`/`ButPause.Switch_
+     * Off` (a play session starting) and ButPauseClick's `ButPause.
+     * Switch_On`/`Switch_Off` (pause toggling) - ButPlay stays visibly
+     * pushed for the WHOLE play session (not just momentarily during
+     * the click), only released by RestoreControls/ButStopClick's own
+     * `ButPlay.Switch_Off`/`ButStop.UnPush` on an actual stop; ButPause
+     * separately stays pushed only while actually paused. Recomputed
+     * fresh from live state every tick here (rather than trying to set
+     * is_on at every individual Play/Pause/Stop/natural-end call site,
+     * which is exactly the kind of easy-to-miss-one-spot bug already
+     * found and fixed elsewhere in this port this session) - matches
+     * the same "derive from live state" pattern led_ay/led_ym already
+     * use just above. gui_playback::thread_started is true from the
+     * moment Play starts the background thread until an explicit Stop
+     * joins it (including the natural-end-triggered stop just below),
+     * making it the right proxy for "a play session is active" (unlike
+     * `file_loaded`, which - correctly - stays true across a Stop, so
+     * the next Play/Open doesn't need a fresh file dialog). */
+    mw->but_play.is_on = mw->playback.thread_started;
+    mw->but_pause.is_on =
+        mw->playback.thread_started && gui_playback_is_paused(&mw->playback);
+
     if (gui_playback_is_finished(&mw->playback)) {
       if (mw->do_loop) {
         char path[sizeof(mw->playback.path)];
@@ -547,6 +682,8 @@ static gboolean on_timer(gpointer data) {
     gtk_status_icon_set_tooltip_text(mw->tray_icon, hint);
   } else {
     gtk_status_icon_set_tooltip_text(mw->tray_icon, "AY Emulator");
+    mw->but_play.is_on = false;
+    mw->but_pause.is_on = false;
   }
   gtk_widget_queue_draw(mw->area);
   return TRUE; /* keep firing */
@@ -569,6 +706,39 @@ static void on_realize(GtkWidget* widget, gpointer data) {
  * duplicates of X/B/Z/L/Up/Down, already reachable via their letter/
  * arrow-key equivalents); F1 (CallHelp opens a .chm help file this
  * port doesn't have). */
+
+/* MainWin.pas: VolUp/VolDown, shared by the Up/Down key handlers below
+ * and on_scroll (MainWin.pas: FormMouseWheelUp/Down - mouse wheel
+ * ANYWHERE on the window adjusts volume, no zone restriction, matching
+ * a plain TForm.OnMouseWheel handler - this port previously had no
+ * scroll handling at all, a real missed feature caught by this entry's
+ * own sweep). */
+static void vol_up(gui_mainwin* mw) {
+  mw->vol_slider.value += 1.0 / mw->vol_slider.w;
+  if (mw->vol_slider.value > 1.0) mw->vol_slider.value = 1.0;
+  if (mw->file_loaded) gui_playback_set_volume(&mw->playback, mw->vol_slider.value);
+  gtk_widget_queue_draw(mw->area);
+}
+
+static void vol_down(gui_mainwin* mw) {
+  mw->vol_slider.value -= 1.0 / mw->vol_slider.w;
+  if (mw->vol_slider.value < 0.0) mw->vol_slider.value = 0.0;
+  if (mw->file_loaded) gui_playback_set_volume(&mw->playback, mw->vol_slider.value);
+  gtk_widget_queue_draw(mw->area);
+}
+
+static gboolean on_scroll(GtkWidget* widget, GdkEventScroll* event,
+                           gpointer data) {
+  (void)widget;
+  gui_mainwin* mw = (gui_mainwin*)data;
+  if (event->direction == GDK_SCROLL_UP) {
+    vol_up(mw);
+  } else if (event->direction == GDK_SCROLL_DOWN) {
+    vol_down(mw);
+  }
+  return TRUE;
+}
+
 static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event,
                               gpointer data) {
   (void)widget;
@@ -600,7 +770,11 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event,
       return TRUE;
     case GDK_x:
     case GDK_X:
-      if (mw->file_loaded) gui_playback_play(&mw->playback);
+      /* MainWin.pas:3558's `byte('X'): Push(ButPlay);` - same PlayClick
+       * no-op-while-already-playing-or-paused guard as the mouse Play
+       * button, see on_button_release's but_play branch (MIG-0100). */
+      if (mw->file_loaded && !mw->playback.thread_started)
+        gui_playback_play(&mw->playback);
       return TRUE;
     case GDK_v:
     case GDK_V:
@@ -608,7 +782,11 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event,
       return TRUE;
     case GDK_c:
     case GDK_C:
-      if (mw->file_loaded) {
+      /* MainWin.pas:3567-3568 - `byte('C'): Push(ButPause);` runs
+       * through the same ButPauseClick as a mouse click, including its
+       * `if not IsPlaying then exit` guard - see on_button_release's
+       * but_pause branch for the bug this mirrors (MIG-0100). */
+      if (mw->file_loaded && mw->playback.thread_started) {
         if (gui_playback_is_paused(&mw->playback))
           gui_playback_play(&mw->playback);
         else
@@ -628,18 +806,10 @@ static gboolean on_key_press(GtkWidget* widget, GdkEventKey* event,
       do_open(mw);
       return TRUE;
     case GDK_Up:
-      mw->vol_slider.value += 1.0 / mw->vol_slider.w;
-      if (mw->vol_slider.value > 1.0) mw->vol_slider.value = 1.0;
-      if (mw->file_loaded)
-        gui_playback_set_volume(&mw->playback, mw->vol_slider.value);
-      gtk_widget_queue_draw(mw->area);
+      vol_up(mw);
       return TRUE;
     case GDK_Down:
-      mw->vol_slider.value -= 1.0 / mw->vol_slider.w;
-      if (mw->vol_slider.value < 0.0) mw->vol_slider.value = 0.0;
-      if (mw->file_loaded)
-        gui_playback_set_volume(&mw->playback, mw->vol_slider.value);
-      gtk_widget_queue_draw(mw->area);
+      vol_down(mw);
       return TRUE;
     case GDK_Left:
       if (mw->file_loaded && gui_playback_duration_seconds(&mw->playback) > 0)
@@ -709,7 +879,8 @@ bool gui_mainwin_create(gui_mainwin* mw) {
   gtk_widget_set_size_request(mw->area, MW_WIDTH, MW_HEIGHT);
   gtk_widget_add_events(mw->area, GDK_BUTTON_PRESS_MASK |
                                        GDK_BUTTON_RELEASE_MASK |
-                                       GDK_POINTER_MOTION_MASK);
+                                       GDK_POINTER_MOTION_MASK |
+                                       GDK_SCROLL_MASK);
   g_signal_connect(mw->area, "expose-event", G_CALLBACK(on_expose), mw);
   g_signal_connect(mw->area, "button-press-event",
                     G_CALLBACK(on_button_press), mw);
@@ -717,6 +888,7 @@ bool gui_mainwin_create(gui_mainwin* mw) {
                     G_CALLBACK(on_button_release), mw);
   g_signal_connect(mw->area, "motion-notify-event", G_CALLBACK(on_motion),
                     mw);
+  g_signal_connect(mw->area, "scroll-event", G_CALLBACK(on_scroll), mw);
 
   static const GtkTargetEntry drop_targets[] = {
       {(gchar*)"text/uri-list", 0, 0}};
@@ -750,6 +922,8 @@ bool gui_mainwin_create(gui_mainwin* mw) {
                     mw);
 
   gui_visualizer_init(&mw->vis);
+  gui_ticker_init(&mw->ticker);
+  mw->ticker_last_index = -1;
 
   mw->timer_id = g_timeout_add(200, on_timer, mw);
   mw->vis_timer_id = g_timeout_add((guint)mw->vis_period_ms, on_vis_timer, mw);

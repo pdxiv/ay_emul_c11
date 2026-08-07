@@ -48,8 +48,18 @@
  *    in an earlier session not to be exercised by either real test file
  *    (ARTe_ST1.pt3 is version 4, below the >=7 gate; Gasman_-_dynamite.pt3
  *    is version 7 but its marker byte is blank) - MIG-0007.
- *  - GetTimePT3 (duration/loop-point precompute) - UI-only, not needed
- *    for correct audio playback.
+ *  - GetTimePT3 (duration/loop-point precompute) - MIG-0101: now ported
+ *    (pt3_get_time in pt3_file.c), transcribed 1:1 from Players.pas:
+ *    15333-15662. The earlier framing here ("UI-only, not needed for
+ *    correct audio playback") was itself incomplete - Global_Tick_Max
+ *    (what GetTimePT3 computes) is what CheckLoopAndStop uses to decide
+ *    when a PT3 song naturally ends with Do_Loop off (Players.pas:
+ *    8732-8746), so this was a real playback-correctness gap, not just
+ *    a UI one; see migration_debt.yaml MIG-0101 for the full trace.
+ *    TSMode (turbosound) is still not simulated here either, matching
+ *    the port's existing single-chip scope above - GetTimePT3's own
+ *    `vars[1]`/second-chip half is skipped, equivalent to the
+ *    original's `TS = $20` case.
  *  - Embedded/rebased-pointer PT3 loading (see Scope above) - MAddr is
  *    always 0 for standalone files, so the rebase branch never runs for
  *    either real test file.
@@ -133,12 +143,32 @@ typedef struct pt3_file {
   uint32_t position_list_offset; /* byte offset of PT3_PositionList[0] */
 
   int64_t global_tick_counter; /* PlConsts[CNum].Global_Tick_Counter -
-                                * incremented every call, informational
-                                * only in this port (see file comment -
-                                * GetTimePT3/Global_Tick_Max isn't
-                                * ported, so nothing checks this against
-                                * a limit; the caller decides how long to
-                                * play). */
+                                * incremented every call; checked against
+                                * global_tick_max by the caller the same
+                                * way ay_file/ym_file/vtx_file/sndh_file
+                                * already do (MIG-0101, see below). */
+  int64_t global_tick_max;     /* PlConsts[CNum].Global_Tick_Max -
+                                * MIG-0101: computed by pt3_file_load via
+                                * a faithful port of GetTimePT3
+                                * (Players.pas:15333-15662), a pattern-
+                                * opcode-only simulation (no audio
+                                * synthesis) that walks the position list
+                                * exactly once. 0 only if the file's
+                                * position list is somehow degenerate
+                                * (empty) - real files always get a real
+                                * value. */
+  int64_t loop_tick;           /* GetTimePT3's `Lp` output - the tick at
+                                 * which PT3_LoopPosition is reached;
+                                 * informational only in this port (no
+                                 * caller currently reads it - Pascal's
+                                 * own RerollMusic doesn't use Lp for
+                                 * IsAYNativeFileType seeking either, only
+                                 * for a "loop shorter TS pair" case this
+                                 * port's TSMode-less scope doesn't have,
+                                 * MIG-0007). */
+  bool do_loop;                 /* settings.pas: Do_Loop (default false) -
+                                  * see CheckLoopAndStop, MIG-0101 */
+  bool real_end_all;            /* Players.pas: Real_End_All - MIG-0101 */
 
   /* Raw (untranscoded CP1251), space-trimmed title/author - Players.pas:
    * "else if FType = FT.PT3" (7405-7427): fixed 32-byte fields at file
@@ -161,17 +191,16 @@ pt3_file_status pt3_file_load(pt3_file* f, const uint8_t* data, size_t size,
 #define PT3_FILE_SAMPLE_RATE_DEF 48000     /* settings.pas: SampleRateDef */
 
 /* Players.pas: MakeBufferTracker (12283-12300) + SynthesizerZX50
- * (AY.pas:1075-1082), the PT3-only (TSMode always false) case. Unlike
- * ay_file_make_buffer/ym_file_make_buffer, this never sets a
- * "real_end"/song-finished flag - GetTimePT3 (the pass that would
- * normally establish Global_Tick_Max, hence when CheckLoopAndStop
- * decides the song has ended) isn't ported this milestone (see
- * pt3_file.h's file comment), so playback runs exactly as many buffers
- * as the caller asks for; looping within the pattern data itself
- * (CurrentPosition wrapping to LoopPosition) still works correctly,
- * only the higher-level "song has looped/ended N times, stop" bookkeeping
- * is absent. Returns the number of sample frames written - always
- * `buffer_length` under this contract. */
+ * (AY.pas:1075-1082), the PT3-only (TSMode always false) case, PLUS
+ * CheckLoopAndStop (Players.pas:8732-8746, MIG-0101) - sets
+ * f->real_end_all once global_tick_counter reaches global_tick_max
+ * (when the caller isn't looping), the same "natural end of song"
+ * contract ay_file/ym_file/vtx_file/sndh_file's own make_buffer
+ * functions already have; looping within the pattern data itself
+ * (CurrentPosition wrapping to LoopPosition) keeps working exactly as
+ * before regardless. Returns the number of sample frames written -
+ * `buffer_length` unless the song ends first (real_end_all become
+ * true), same short-return contract as every other format. */
 int pt3_file_make_buffer(pt3_file* f, int16_t* buf, int buffer_length);
 
 #endif /* AY_ENGINE_PT3_FILE_H */

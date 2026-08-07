@@ -2,6 +2,7 @@
 
 #include <gdk/gdk.h>
 #include <math.h>
+#include <stdint.h>
 
 static void draw_pixbuf_region(cairo_t* cr, GdkPixbuf* skin, int src_x,
                                 int src_y, int w, int h, int dest_x,
@@ -12,6 +13,50 @@ static void draw_pixbuf_region(cairo_t* cr, GdkPixbuf* skin, int src_x,
   cairo_rectangle(cr, src_x, src_y, w, h);
   cairo_fill(cr);
   cairo_restore(cr);
+}
+
+/* TMoveZone.AddBitmaps' `m: boolean` color-key path (MainWin.pas:2676-
+ * 2681: `Bmp1.TransparentColor := Bmp1.Canvas.Pixels[0, 0]; Transparent
+ * := True; TransparentMode := tmFixed;`) - the handle bitmap's own
+ * (0,0) pixel is the transparent color key, so any pixel matching it
+ * (typically the rounded corners' background fill) is skipped rather
+ * than drawn. Cairo has no color-key compositing primitive, so this
+ * builds a small ARGB32 surface by hand (same raw-pixel technique as
+ * gui/src/ticker.c's AND-mask rendering) with alpha=0 on key-color
+ * pixels, alpha=255 elsewhere, then paints that. */
+static void draw_pixbuf_region_keyed(cairo_t* cr, GdkPixbuf* skin,
+                                      int src_x, int src_y, int w, int h,
+                                      int dest_x, int dest_y) {
+  int rowstride = gdk_pixbuf_get_rowstride(skin);
+  int nch = gdk_pixbuf_get_n_channels(skin);
+  guchar* pixels = gdk_pixbuf_get_pixels(skin);
+  guchar* key = pixels + (size_t)src_y * rowstride + (size_t)src_x * nch;
+  guchar kr = key[0], kg = key[1], kb = key[2];
+
+  cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                                       w, h);
+  unsigned char* dst = cairo_image_surface_get_data(surf);
+  int dst_stride = cairo_image_surface_get_stride(surf);
+  for (int yy = 0; yy < h; yy++) {
+    guchar* srow = pixels + (size_t)(src_y + yy) * rowstride +
+                    (size_t)src_x * nch;
+    uint32_t* drow = (uint32_t*)(dst + yy * dst_stride);
+    for (int xx = 0; xx < w; xx++) {
+      guchar r = srow[xx * nch + 0];
+      guchar g = srow[xx * nch + 1];
+      guchar b = srow[xx * nch + 2];
+      drow[xx] = (r == kr && g == kg && b == kb)
+                     ? 0u
+                     : (0xFFu << 24) | ((uint32_t)r << 16) |
+                           ((uint32_t)g << 8) | (uint32_t)b;
+    }
+  }
+  cairo_surface_mark_dirty(surf);
+  cairo_save(cr);
+  cairo_set_source_surface(cr, surf, dest_x, dest_y);
+  cairo_paint(cr);
+  cairo_restore(cr);
+  cairo_surface_destroy(surf);
 }
 
 bool gui_button_hit_test(const gui_button* b, int mx, int my) {
@@ -34,28 +79,57 @@ bool gui_hslider_hit_test(const gui_hslider* s, int mx, int my) {
   return mx >= s->x && mx < s->x + s->w && my >= s->y && my < s->y + s->h;
 }
 
-double gui_hslider_value_from_x(const gui_hslider* s, int mx) {
-  if (s->w <= 0) return 0.0;
-  double v = (double)(mx - s->x) / (double)s->w;
-  if (v < 0.0) v = 0.0;
-  if (v > 1.0) v = 1.0;
-  return v;
+/* Current on-screen pixel offset of the handle's left edge, relative to
+ * s->x - MainWin.pas: TMoveZone::PosX, derived from `value` (the
+ * normalized 0.0-1.0 form this struct keeps as its source of truth). */
+static int slider_travel(const gui_hslider* s) {
+  int t = s->w - s->thumb_w;
+  return t > 0 ? t : 0;
 }
 
-void gui_hslider_draw(const gui_hslider* s, cairo_t* cr) {
+static int slider_pos_x(const gui_hslider* s) {
+  return (int)lround(s->value * slider_travel(s));
+}
+
+static void slider_set_pos_x(gui_hslider* s, int pos_x) {
+  int travel = slider_travel(s);
+  if (pos_x < 0) pos_x = 0;
+  if (pos_x > travel) pos_x = travel;
+  s->value = travel > 0 ? (double)pos_x / (double)travel : 0.0;
+}
+
+static bool slider_thumb_hit_test(const gui_hslider* s, int mx, int my) {
+  int tx = s->x + slider_pos_x(s);
+  return mx >= tx && mx < tx + s->thumb_w && my >= s->y &&
+         my < s->y + s->thumb_h;
+}
+
+void gui_hslider_press(gui_hslider* s, int mx) {
+  /* MainWin.pas:2131-2155 - ToucheBut (thumb) match keeps PosX as-is
+   * and just starts tracking the delta from here; a Touche-only (bare
+   * track) match jumps the thumb to be centered under the click first. */
+  if (!slider_thumb_hit_test(s, mx, s->y)) {
+    slider_set_pos_x(s, mx - s->x - s->thumb_w / 2);
+  }
+  s->dragging = true;
+  s->drag_anchor_x = mx;
+}
+
+void gui_hslider_drag(gui_hslider* s, int mx) {
+  if (!s->dragging) return;
+  int pos_x = slider_pos_x(s) + (mx - s->drag_anchor_x);
+  s->drag_anchor_x = mx;
+  slider_set_pos_x(s, pos_x);
+}
+
+void gui_hslider_draw(const gui_hslider* s, cairo_t* cr, GdkPixbuf* skin) {
   /* The skin's base bitmap already shows the track/groove graphic under
    * this rect (drawn as part of the main window's background blit) -
-   * only a thumb marker is overlaid here, not a full custom track. The
-   * original composites a real thumb bitmap from the skin
-   * (MoveVol/MoveProgr.AddBitmaps, MainWin.pas:3813-3814); this port
-   * draws a plain filled rectangle instead (see zones.h's file comment)
-   * - a future milestone could draw the real thumb bitmap here without
-   * changing this struct's shape. */
-  int thumb_w = 6;
-  double thumb_x = s->x + s->value * (s->w - thumb_w);
-  cairo_save(cr);
-  cairo_set_source_rgb(cr, 0.85, 0.85, 0.85);
-  cairo_rectangle(cr, thumb_x, s->y, thumb_w, s->h);
-  cairo_fill(cr);
-  cairo_restore(cr);
+   * only the real handle bitmap (MoveVol/MoveProgr.AddBitmaps,
+   * MainWin.pas:3813-3814) is composited on top here, color-keyed same
+   * as the original (see draw_pixbuf_region_keyed's own comment). */
+  if (s->thumb_w <= 0 || s->thumb_h <= 0) return;
+  int tx = s->x + slider_pos_x(s);
+  draw_pixbuf_region_keyed(cr, skin, s->thumb_src_x, s->thumb_src_y,
+                            s->thumb_w, s->thumb_h, tx, s->y);
 }

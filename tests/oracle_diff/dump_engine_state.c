@@ -508,6 +508,16 @@ static void run_pt3_file(const char* out_path, const char* pt3_path) {
     fprintf(stderr, "run_pt3_file: pt3_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0101: pt3_file_load now computes a real global_tick_max (see
+   * pt3_file.h) and pt3_file_make_buffer can return short of the
+   * requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunPT3FileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];

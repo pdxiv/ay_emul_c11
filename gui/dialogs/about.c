@@ -22,6 +22,9 @@ typedef struct about_win {
                        * outside that crop too (About.pas:FormCreate) */
   gui_button but_ok;
   gui_button but_help;
+  gui_button* pressed_button; /* see gui/src/mainwin.c's own
+                                * pressed_button field comment - same
+                                * press-and-drag-off-to-cancel tracking */
   GMainLoop* loop;
 } about_win;
 
@@ -78,15 +81,22 @@ static gboolean on_button_press(GtkWidget* widget, GdkEventButton* event,
   int x = (int)event->x, y = (int)event->y;
   if (gui_button_hit_test(&aw->but_ok, x, y)) {
     aw->but_ok.is_pushed = true;
+    aw->pressed_button = &aw->but_ok;
   } else if (gui_button_hit_test(&aw->but_help, x, y)) {
     aw->but_help.is_pushed = true;
+    aw->pressed_button = &aw->but_help;
   } else {
     /* About.pas:FormMouseDown - BeginDrag when neither button is hit,
      * same as MainWin.pas's own MoveWin zone (see gui/src/mainwin.c's
-     * on_button_press). */
-    gdk_window_begin_move_drag(gtk_widget_get_window(widget), event->button,
-                                (int)event->x_root, (int)event->y_root,
-                                event->time);
+     * on_button_press). Targets aw->window (the real toplevel), not
+     * `widget` (aw->area, a child GtkDrawingArea with its own nested
+     * GdkWindow) - passing the child window to gdk_window_begin_move_
+     * drag silently no-ops on WMs that don't walk up to the real
+     * toplevel themselves, same real bug just fixed in mainwin.c's
+     * own drag zone. */
+    gdk_window_begin_move_drag(gtk_widget_get_window(aw->window),
+                                event->button, (int)event->x_root,
+                                (int)event->y_root, event->time);
   }
   gtk_widget_queue_draw(widget);
   return TRUE;
@@ -106,6 +116,23 @@ static void show_help_unavailable(GtkWidget* parent) {
   gtk_widget_destroy(msg);
 }
 
+/* About.pas: FormMouseMove's own Push/UnPush tracking (mirrors
+ * MainWin.pas's same per-frame behavior - see gui/src/mainwin.c's
+ * pressed_button comment) - purely the visual feedback here, since
+ * on_button_release above already re-checks the release position
+ * itself and was never functionally broken like mainwin.c's
+ * equivalent was. */
+static gboolean on_motion(GtkWidget* widget, GdkEventMotion* event,
+                           gpointer data) {
+  about_win* aw = (about_win*)data;
+  if (aw->pressed_button) {
+    aw->pressed_button->is_pushed = gui_button_hit_test(
+        aw->pressed_button, (int)event->x, (int)event->y);
+    gtk_widget_queue_draw(widget);
+  }
+  return TRUE;
+}
+
 static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event,
                                    gpointer data) {
   about_win* aw = (about_win*)data;
@@ -114,6 +141,7 @@ static gboolean on_button_release(GtkWidget* widget, GdkEventButton* event,
   bool was_help = aw->but_help.is_pushed;
   aw->but_ok.is_pushed = false;
   aw->but_help.is_pushed = false;
+  aw->pressed_button = NULL;
   gtk_widget_queue_draw(widget);
   if (was_ok && gui_button_hit_test(&aw->but_ok, x, y)) {
     gtk_widget_destroy(aw->window);
@@ -180,12 +208,15 @@ void gui_about_show(GtkWindow* parent) {
   aw.area = gtk_drawing_area_new();
   gtk_widget_set_size_request(aw.area, AB_WIDTH, AB_HEIGHT);
   gtk_widget_add_events(aw.area, GDK_BUTTON_PRESS_MASK |
-                                      GDK_BUTTON_RELEASE_MASK);
+                                      GDK_BUTTON_RELEASE_MASK |
+                                      GDK_POINTER_MOTION_MASK);
   g_signal_connect(aw.area, "expose-event", G_CALLBACK(on_expose), &aw);
   g_signal_connect(aw.area, "button-press-event",
                     G_CALLBACK(on_button_press), &aw);
   g_signal_connect(aw.area, "button-release-event",
                     G_CALLBACK(on_button_release), &aw);
+  g_signal_connect(aw.area, "motion-notify-event", G_CALLBACK(on_motion),
+                    &aw);
   gtk_container_add(GTK_CONTAINER(aw.window), aw.area);
 
   aw.loop = g_main_loop_new(NULL, FALSE);

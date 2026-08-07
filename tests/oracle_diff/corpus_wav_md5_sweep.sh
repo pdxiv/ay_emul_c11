@@ -20,6 +20,7 @@ run_one() {
   fname="$1"
   scenario="$2"
   frames="$3"
+  player_flags="${4:-}"
   oracle_wav="$WORKDIR/oracle.wav"
   player_wav="$WORKDIR/player.wav"
   rm -f "$oracle_wav" "$player_wav"
@@ -35,7 +36,7 @@ run_one() {
   fi
 
   timeout 60 "$PLAYER_BIN" "$CORPUS/$fname" --wav="$player_wav" --frames="$frames" \
-    >"$WORKDIR/player.log" 2>&1
+    $player_flags >"$WORKDIR/player.log" 2>&1
   player_rc=$?
   if [ "$player_rc" = 124 ]; then
     echo "[FAIL] $fname ($scenario): ay_player TIMED OUT (60s)"
@@ -122,7 +123,7 @@ for f in *; do
     README.md)
       continue
       ;;
-    *.pt3) run_one "$f" wav_export_pt3 204800 ;;
+    *.pt3) run_one "$f" wav_export_pt3 204800 --ignore-end ;;
     *.ym) run_one "$f" wav_export_ym 204800 ;;
     *.vtx|*.VTX) run_one "$f" wav_export 204800 ;;
     *.ay) run_one "$f" wav_export_ay 512 ;;

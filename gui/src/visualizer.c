@@ -81,10 +81,27 @@ void gui_visualizer_tick(gui_visualizer* v, ay_engine* engine, uint32_t smp) {
 
 void gui_visualizer_draw(const gui_visualizer* v, cairo_t* cr) {
   cairo_save(cr);
-  cairo_set_source_rgb(cr, 0, 0, 0); /* MainWin.pas: default TCanvas.Pen -
-                                       * see visualizer.c's own header
-                                       * comment on why this is black */
-  cairo_set_line_width(cr, 1);
+  /* MainWin.pas:3381-3382 (FormCreate): `BMP_Vis.Canvas.Pen.Color :=
+   * $464646; BMP_Vis.Canvas.Pen.Width := 3;` - set ONCE at startup and
+   * applying to every subsequent MoveTo/LineTo on this canvas (both
+   * RedrawVisChannels' amp bars and RedrawVisSpectrum's spectrum
+   * bars share the same BMP_Vis canvas/pen) - NOT the default black
+   * 1px pen an unadorned TCanvas would otherwise have. $464646 is a
+   * neutral dark gray (all three channels equal, so BGR-vs-RGB byte
+   * order doesn't matter here) at 70/255 intensity, not pure black.
+   * Missed originally (no explicit Pen.Width/Color assignment was
+   * found near the MoveTo/LineTo calls themselves - it's set well
+   * away from them, at FormCreate). */
+  cairo_set_source_rgb(cr, 0x46 / 255.0, 0x46 / 255.0, 0x46 / 255.0);
+  /* MainWin.pas's TCanvas.MoveTo/LineTo (GDI) draws a hard, fully-
+   * opaque line with no antialiasing - Cairo's default antialiased
+   * stroking softens/lightens a nominally-same-width line (especially
+   * at the half-integer coordinates used below to keep it centered on
+   * whole device pixels), making it look fainter than the original's
+   * crisp line. Disabling antialiasing here reproduces GDI's own
+   * crisp look. */
+  cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
+  cairo_set_line_width(cr, 3);
 
   if (v->amp_checked) {
     /* MainWin.pas:791-816, RedrawVisChannels - columns 1/8/15 within

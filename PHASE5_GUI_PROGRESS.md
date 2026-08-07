@@ -633,3 +633,245 @@ marked done without a corresponding validated ledger entry.
   scope decision or taking on a separate, larger project (window
   rescaling, Windows-registry integration, etc. - all already
   correctly categorized as out of scope, not gaps).
+- **2026-08-06** (continued further still): user reported two real
+  bugs from actually using the app - the main window couldn't be
+  dragged at all, and the visualizer bars looked "very thin". MIG-0096
+  traced both against `MainWin.pas` and fixed them:
+   - The window-drag bug was a real regression, not a fidelity gap:
+     `gdk_window_begin_move_drag` was being called on the drawing
+     area's own child `GdkWindow` instead of the actual toplevel
+     window, so the window-manager move request silently no-op'd. The
+     original's own drag zone (a specific title-strip region, not
+     "anywhere" - confirmed by re-reading `FormMouseDown`/
+     `WndCallback`) was already correctly ported; only the target
+     window was wrong. Verified with a REAL synthetic X11 drag
+     (`libXtst`) - the window measurably moved. The exact same bug
+     existed in the About dialog's own background-drag fallback,
+     fixed the same way.
+   - The "thin bars" turned out to be an antialiasing mismatch: GDI's
+     `MoveTo`/`LineTo` draws hard, non-antialiased 1px lines; Cairo's
+     default stroke rendering softens a nominally-identical 1px line.
+     Disabling antialiasing for the visualizer's bar/marker drawing
+     reproduced GDI's crisp look - verified with a real cropped/
+     enlarged screenshot during actual playback.
+
+  A follow-up sweep (explicitly requested) re-read `FormMouseMove`/
+  `FormMouseUp`/`FormMouseWheelDown`/`Up` in full rather than trusting
+  the already-ported subset was complete, and found two more real,
+  previously-unnoticed gaps in the same area:
+   - Press-and-drag-off-to-cancel: every button in this port fired its
+     action unconditionally on release regardless of where the cursor
+     ended up, and never visually un-pushed while dragging off a held
+     button - unlike the original, which continuously tracks this via
+     `FormMouseMove` and only fires on release if still over the zone.
+     Fixed with a `pressed_button` tracking field reusing the existing
+     `gui_button_hit_test` continuously during motion.
+   - Mouse wheel volume control was entirely unimplemented - the
+     original adjusts volume on any wheel event anywhere on the
+     window. Added, reusing the same logic the Up/Down keyboard
+     shortcuts already had (now shared, not duplicated).
+
+  Full regression suite re-confirmed clean throughout (60/60,
+  75/0/1-known/0, full smoke pass - engine untouched); 10/10 repeat
+  full-app runs clean under `timeout` after each fix.
+- **2026-08-06** (continued further still): user reported three more
+  issues after actually using the app further. MIG-0097 traced and
+  fixed all three:
+   - Play/Pause buttons "don't stay depressed sometimes": traced
+     `PlayCurrent`/`ButPauseClick`/`RestoreControls` and found these
+     two buttons are NOT purely momentary in the original - `ButPlay.
+     Switch_On` keeps Play visibly pushed for the entire play session
+     (only released on an actual Stop), and `ButPause` separately
+     tracks the paused sub-state the same way. This port treated both
+     as momentary (briefly pushed during the click only), never
+     reflecting ongoing state. Fixed by deriving `is_on` for both
+     fresh from live playback state every timer tick, rather than
+     trying to hook every individual call site (the same "miss a
+     call site" bug class already fixed once this session).
+   - Visualizer bars "still only about 1 pixel wide" where the
+     original shows ~3px: a closer re-read of `FormCreate` (not just
+     the drawing functions themselves) found `BMP_Vis.Canvas.Pen.
+     Width := 3; Pen.Color := $464646;` set once at startup, missed
+     entirely by both the original MIG-0094 port and the MIG-0096
+     antialiasing fix. Fixed the width (1 to 3) and color (black to
+     the real dark gray) together.
+   - No song title anywhere in the actual window: this port's window
+     is undecorated (required for the custom skin shape), so the OS
+     window title this port already sets correctly has zero visible
+     effect - the original's real display lives INSIDE the skin, in a
+     dedicated scroll-text area with its own smooth ticker-scroll
+     animation, never ported at all. Added a static (non-scrolling)
+     version showing the real "Author - Title" text in the correct
+     area, font, and color - a documented simplification (no scroll
+     animation for titles wider than the display area) rather than
+     porting the full animation state machine.
+
+  Verified with a single real screenshot during actual playback
+  showing all three fixes simultaneously: song title displayed, Play
+  button visibly pushed while playing (distinctly different from its
+  neighbors), and visibly thicker/correctly-colored visualizer bars.
+  Full regression suite re-confirmed clean (60/60, 75/0/1-known/0,
+  full smoke pass - engine untouched); 10/10 repeat full-app runs
+  clean under `timeout`.
+- **2026-08-06** (continued further still): user explicitly asked for
+  full parity with the Pascal ticker, superseding MIG-0097's static
+  stand-in ("Can you please make sure that the C11 port works exactly
+  as the pas codebase for this?"), and confirmed via AskUserQuestion
+  that both the AND-mask/horizontal-scroll system and the vertical
+  multi-line-transition system were in scope. MIG-0098 traced the
+  full system in `MainWin.pas` and implemented a new `gui_ticker`
+  module (`gui/include/gui/ticker.h`, `gui/src/ticker.c`):
+   - AND-mask text rendering: the original ANDs a white-background
+     text mask against the skin's own background pixels (`CopyMode :=
+     cmSrcAnd`) rather than drawing opaque text over a solid box -
+     ANDing with white is the identity, so the skin's own art shows
+     through everywhere except where letters darken it. Cairo has no
+     bitwise-AND raster operator, so this was hand-implemented: render
+     text to an off-screen surface, read back its raw pixels and the
+     skin's raw pixels, AND them per-channel in a C loop, composite
+     the result.
+   - Horizontal ticker-scroll (1px/~30ms tick, ~1.5s pause at each
+     end) and vertical multi-line slide transition on song change,
+     the latter deliberately narrowed to a single-step (Prev/Next-
+     adjacent) animation rather than the original's fuller N-line/
+     ">16 away" jump-then-catch-up logic - a disclosed simplification,
+     not a silent one (see MIG-0098's debt list).
+   - Double-click to pause/resume the scroll, and click-drag to
+     manually scrub it - both ported directly from the original's
+     `FormMouseDown`/`MoveScr` handlers.
+
+  Verified via clean rebuild (zero warnings), full regression suite
+  green, 10/10 stability runs, and real single-window screenshots
+  (driven by synthetic X11 input via a small libXtst harness) showing
+  each piece working: the skin's bezel visible unaltered around the
+  ticker with dark text over its own light backdrop (not an opaque
+  box); horizontal scroll advancing over several seconds; a genuine
+  mid-animation frame of the vertical slide transition after clicking
+  Next; and the double-click pause/resume toggle holding then
+  resuming the scroll. This also resolves MIG-0097's static-title
+  debt item. All screenshots and the test harness were removed from
+  the scratchpad after verification.
+- **2026-08-06** (continued further still): user reported the volume
+  and progress-bar slider "handles" don't look like the Pascal
+  version, and that timeline scrubbing doesn't work. MIG-0099 traced
+  both:
+   - The handle appearance gap was already known/documented (zones.h's
+     own file comment) - `gui_hslider_draw` drew a plain flat gray
+     rectangle instead of the real handle bitmap TMoveZone.AddBitmaps
+     pulls from the skin (a triangular wedge for volume, a rounded
+     pill for progress), color-keyed via the source rect's own
+     top-left pixel as the transparent color. Cairo has no color-key
+     compositing primitive, so this was hand-implemented the same way
+     as the ticker's AND-mask rendering (MIG-0098): build a small
+     ARGB32 surface with alpha=0 on key-color pixels, composite that.
+   - Re-traced FormMouseDown/FormMouseMove's actual slider-drag
+     algorithm and found this port's old click-to-fraction mapping
+     wasn't how the original works at all: clicking the handle itself
+     starts a relative/delta drag; clicking elsewhere in the track
+     immediately jumps the handle to be centered under the click
+     point, THEN starts the same delta drag - and the travel range is
+     the real track-width-minus-handle-width, not an assumed fixed
+     thumb size. Replaced with `gui_hslider_press`/`gui_hslider_drag`
+     matching this exactly.
+   - Found and fixed a real, independent bug while investigating:
+     `on_motion`'s progress-slider-drag branch was missing the
+     `gtk_widget_queue_draw` call its volume-slider sibling already
+     had, so a progress-bar drag's value/seek updated correctly but
+     the screen only caught up on the next ~30ms visualizer tick
+     rather than immediately.
+   - Empirically confirmed (synthetic X11 drags) that the underlying
+     drag-to-seek engine logic was already correct before this entry -
+     the "doesn't work" report is best explained by the flat, easy-to-
+     miss gray thumb (fixed by (1)) and the redraw lag (fixed by (3)).
+
+  Verified via clean rebuild (zero warnings, both engine and gui),
+  full regression suite green, 10/10 stability runs, and real
+  screenshots confirming both handles now render as the real skin art
+  with clean edges, dragging tracks the mouse correctly and clamps at
+  the real travel range, and a bare click on empty track jumps the
+  handle to be centered under it exactly as the original.
+- **2026-08-07**: user reported progress-bar scrubbing doesn't work on
+  SNDH files (Temple_of_Asherah.sndh), and pressing Pause twice while
+  stopped starts the song, unlike the Pascal version. MIG-0100 traced
+  and fixed both, plus one more found auditing the same code:
+   - SNDH seeking: sndh_file.h's own file comment had incorrectly
+     written off the TIME tag as "UI-only" - re-tracing Players.pas's
+     RerollMusic/atari.pas's Atari_SeekTo showed SNDH seeking is real
+     in the original and driven by the same Global_Tick_Max mechanism
+     AY/YM/VTX already use, just populated from the TIME tag (seconds
+     * PlayFreq, or a 5-minute fallback) rather than a file-format
+     duration field. Wired this through at the engine level
+     (sndh_file.c now retains what it previously scanned-past-and-
+     discarded, sets the real atari.tick_count_max instead of an
+     effectively-unbounded placeholder) and exposed it via
+     player_get_tick_position/player_get_seconds_per_tick - no
+     gui/src changes needed, the GUI's seek logic was already generic.
+     Confirmed a large forward seek is genuinely slow (tens of seconds
+     of CPU) - matches the original's own lack of a seek fast-path for
+     this format, not a regression.
+   - Pause-while-stopped starting playback: ButPauseClick's `if not
+     IsPlaying then exit` guard (MainWin.pas:971-975) was missing
+     entirely in this port - pressing Pause while stopped set an
+     internal paused flag with nothing running to observe it, then the
+     NEXT Pause press saw that stale flag and started the song fresh.
+     Fixed by guarding on the existing "is a play session active"
+     proxy this port already uses elsewhere.
+   - Play-while-paused resuming (not user-reported, found while
+     auditing): PlayClick's own `if IsPlaying then Exit` means Play is
+     ALSO a no-op while paused in the original (only Pause resumes) -
+     this port let Play silently resume playback during a pause too.
+     Fixed with the same guard pattern.
+
+  Verified via clean rebuild, full regression suite green (including
+  re-confirming the SNDH WAV-export comparison still matches its
+  known baseline, and a direct re-check of Temple_of_Asherah.sndh
+  itself against the oracle at the same bound the corpus sweep uses),
+  10/10 stability runs, and real screenshots showing a seek visibly
+  progressing over several seconds and both button fixes holding
+  correct state through Stop/Pause/Pause and Play/Pause/Play sequences.
+- **2026-08-07** (continued): user asked to verify seeking works
+  identically to Pascal across ALL formats, not just the ones already
+  wired up. MIG-0101 audited every format's RerollMusic/Atari_SeekTo
+  branch and cross-checked against the original's own embedded
+  FILETYPES resource (extracted from Ay_Emul.res) - finding that ALL
+  14 remaining tracker formats (PT1/PT2/PT3/STC/ASC/ASC0/ST1/STP/PSC/
+  FLS/FTC/SQT/GTR/FXM/PSM) are registered `type=AY` in the original
+  and so get real seeking through the exact same mechanism true .ay
+  files use, via each format's own GetTimeXXX duration precompute -
+  directly contradicting this port's own earlier "no Global_Tick_Max,
+  UI-only" framing, which was correct for the earlier engine-
+  correctness phase but never revisited for this phase's actual seek-
+  parity needs. It also means these formats never naturally end
+  during real playback in this port (they just loop the pattern data
+  forever) - a real playback-correctness gap on top of the seeking one.
+
+  Given the true size (13-14 separate, substantial pattern-opcode
+  interpreters), the user chose to pilot PT3 first. Fully ported:
+  GetTimePT3 itself (a faithful line-by-line C transcription, cross-
+  checked opcode-by-opcode against the existing, oracle-validated
+  PatternInterpreter to confirm byte-consumption amounts match),
+  CheckLoopAndStop wiring (real natural end-of-song), and player.c's
+  tick-position/seconds-per-tick cases. Discovered along the way that
+  wiring up PT3's real duration broke two existing regression tests
+  that had - without anyone realizing it - been relying on PT3 never
+  stopping on its own: the Pascal oracle's own RunPT3FileTest harness
+  runs PT3 with a documented sentinel Global_Tick_Max specifically
+  because GetTimePT3 wasn't ported on either side when that harness
+  was written. Since the oracle is never edited, added a matching
+  `--ignore-end` flag to ay_player (and an equivalent direct fix in
+  dump_engine_state.c) so the regression tests keep comparing
+  equivalent content, without weakening real playback's own default
+  natural-end behavior at all.
+
+  Verified via clean rebuild (engine/gui/ay_player, zero warnings),
+  full regression suite green (75/75, including 5 corpus PT3 files
+  that turned out to have real durations shorter than the fixed test
+  window - all pass again with --ignore-end), 10/10 stability runs,
+  a 40-file random spot-check against the much larger all_tunes/
+  corpus (crash/hang check only), and real screenshots + a temporary
+  debug trace confirming forward seeking, backward seeking (full
+  reload-from-scratch), and natural end-of-song (a 3.84s PT3 file
+  correctly stopping instead of looping forever) all work exactly as
+  traced from the Pascal source. The other 13 tracker formats are
+  explicitly tracked, open, user-approved next-up work (MIG-0101's
+  own debt list), not a settled scope decision.

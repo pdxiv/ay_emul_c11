@@ -36,12 +36,17 @@
  *    tags that affect playback: VBL/TA/TB/TC/TD (PlayFreq - PlayGen itself
  *    is read but never acted on, matching the original's own comment at
  *    Players.pas:7068 "ignored, always used VBL for the moment"), "##"
- *    (NumberOfSongs), "!#"/"#!" (CurrentSong). COMM/TITL/RIPP/CONV/YEAR
- *    (author/title/etc strings), TIME (per-song duration), and
- *    nSN/nST (song name table) are skipped over (their bytes are scanned
- *    past correctly, matching HdPos bookkeeping, so later tags still
- *    parse right) but their *content* is discarded - all are playlist/UI
- *    metadata, irrelevant to correct audio playback.
+ *    (NumberOfSongs), "!#"/"#!" (CurrentSong), and TIME (per-song
+ *    duration, sndh.pas:GetTunesTime - MIG-0100: originally scanned-
+ *    past-but-discarded like the string tags below, on the mistaken
+ *    assumption it was UI-only; it's actually load-bearing for
+ *    Players.pas's own RerollMusic/Atari_SeekTo seek support and for
+ *    the song's natural end - both wired up now, see sndh_file.h's own
+ *    struct/function comments). COMM/TITL/RIPP/CONV/YEAR (author/
+ *    title/etc strings) and nSN/nST (song name table) are still
+ *    skipped over (their bytes are scanned past correctly, matching
+ *    HdPos bookkeeping, so later tags still parse right) but their
+ *    *content* is discarded - genuinely playlist/UI metadata only.
  *  - Atari_PrepMem's full memory layout (atari.pas:1094-1315) except
  *    InitSTMem (atari.pas:198-207, a GEMDOS memory-pool allocator
  *    bookkeeping call - irrelevant unless the SNDH program itself calls
@@ -99,11 +104,22 @@ typedef struct sndh_file {
   uint32_t mem_size;
 
   bool real_end_all; /* mirrors Players.pas: Real_End_All */
+  int play_freq;      /* sndh.pas: PlayFreq (VBL tag, Hz) - the current
+                        * song's tick rate; atari.tick_count/
+                        * tick_count_max are counted in VBL ticks at
+                        * this rate (MIG-0100). */
 } sndh_file;
 
 /* Parses `data`/`size` (the whole .sndh file's bytes) and sets up
  * f->atari/f->ay for playback. `f` takes ownership of a freshly allocated
- * 68000 memory image; call sndh_file_free when done. */
+ * 68000 memory image; call sndh_file_free when done. Also parses the
+ * TIME tag (sndh.pas: GetTunesTime) for the selected song and sets
+ * f->atari.tick_count_max to the real declared duration in VBL ticks
+ * (Players.pas:7112-7115's own `if PlayTimes[CurrentSong-1] = 0 then
+ * Time := PlayFreq * 300` 5-minute fallback when the tag is absent/
+ * zero) - MIG-0100, previously left effectively unbounded
+ * (0x7FFFFFFF), which also silently disabled seek support (see
+ * player_get_tick_position's own SNDH case). */
 sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
                                  size_t size, int sample_rate);
 
@@ -114,11 +130,11 @@ void sndh_file_free(sndh_file* f);
 /* Players.pas: MakeBufferSNDH (14049-14074). Same contract as
  * ay_file_make_buffer/ym_file_make_buffer: runs until `buffer_length`
  * stereo16 sample frames are written or the song ends
- * (f->real_end_all) - though as with pt3_file, no real end-of-song
- * duration is known for SNDH either (Players.pas relies on
- * atari_emulate's tick_count_max, which the caller should set via
- * f->atari.tick_count_max/do_loop before the first call if a bounded
- * run is wanted; left at atari_emulate_init's own default otherwise). */
+ * (f->real_end_all, now reachable via the real declared duration -
+ * see sndh_file_load's own comment, MIG-0100). Callers wanting a
+ * different bound (e.g. a fixed-length export) may still override
+ * f->atari.tick_count_max/do_loop after loading, before the first
+ * call. */
 int sndh_file_make_buffer(sndh_file* f, int16_t* buf, int buffer_length);
 
 #endif /* AY_ENGINE_SNDH_FILE_H */

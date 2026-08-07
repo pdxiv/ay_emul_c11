@@ -217,7 +217,7 @@ bool player_real_end_all(const player* p) {
     case PLAYER_FORMAT_YM:
       return p->as.ym.real_end_all;
     case PLAYER_FORMAT_PT3:
-      return false; /* pt3_file has no real_end_all concept - see pt3_file.h */
+      return p->as.pt3.real_end_all; /* MIG-0101 */
     case PLAYER_FORMAT_SNDH:
       return p->as.sndh.real_end_all;
     case PLAYER_FORMAT_VTX:
@@ -252,6 +252,28 @@ bool player_real_end_all(const player* p) {
     case PLAYER_FORMAT_UNKNOWN:
     default:
       return true;
+  }
+}
+
+void player_set_do_loop(player* p, bool do_loop) {
+  switch (p->format) {
+    case PLAYER_FORMAT_AY:
+      p->as.ay.do_loop = do_loop;
+      break;
+    case PLAYER_FORMAT_YM:
+      p->as.ym.do_loop = do_loop;
+      break;
+    case PLAYER_FORMAT_VTX:
+      p->as.vtx.do_loop = do_loop;
+      break;
+    case PLAYER_FORMAT_SNDH:
+      p->as.sndh.atari.do_loop = do_loop;
+      break;
+    case PLAYER_FORMAT_PT3:
+      p->as.pt3.do_loop = do_loop; /* MIG-0101 */
+      break;
+    default:
+      break; /* no do_loop concept for this format - see player_real_end_all */
   }
 }
 
@@ -525,20 +547,38 @@ bool player_get_tick_position(const player* p, int64_t* counter,
       *counter = p->as.vtx.global_tick_counter;
       *max = p->as.vtx.global_tick_max;
       return true;
-    /* PT1/PT2/PT3/GTR/FLS/STC/STP/FXM/PSM/ASC/ASC0/FTC/PSC/SQT all have
-     * global_tick_counter but genuinely no global_tick_max field -
-     * their song-length/duration precompute (PT3.pas's own GetTimePT3
-     * is the documented example, pt3_file.h: "UI-only, not needed [for
-     * audio correctness]") was a deliberate, already-recorded earlier
-     * scope decision to skip, not an oversight discovered here. No
-     * "total ticks" means no meaningful fraction to seek by - same
-     * "unknown/no reliable duration" case as SNDH below, for a
-     * different underlying reason (a real duration concept the file
-     * format has but this port never computed, vs. SNDH's separate
-     * Atari-VBL position model). */
+    /* MIG-0100: SNDH's TIME tag (sndh.pas: GetTunesTime) gives a real
+     * declared duration in VBL ticks, same role as AY/YM/VTX's own
+     * Global_Tick_Max - wired through atari_emulate's tick_count/
+     * tick_count_max (see sndh_file_load's own comment for the exact
+     * seconds*PlayFreq/5-minute-fallback derivation). Previously
+     * returned false here on the mistaken assumption ("SNDH's separate
+     * Atari-VBL position model") that no comparable total existed. */
+    case PLAYER_FORMAT_SNDH:
+      *counter = p->as.sndh.atari.tick_count;
+      *max = p->as.sndh.atari.tick_count_max;
+      return true;
+    /* MIG-0101: PT3 is registered `type=AY` in the original's own
+     * FILETYPES resource (confirmed by extracting Ay_Emul.res's text),
+     * meaning RerollMusic seeks it through IsAYNativeFileType's branch
+     * exactly like true .ay files - Global_Tick_Max is real, computed
+     * by GetTimePT3 (a pattern-opcode-only duration simulation, ported
+     * as pt3_get_time in pt3_file.c). The earlier framing here ("no
+     * Global_Tick_Max field... UI-only") was itself an unverified
+     * assumption - see migration_debt.yaml MIG-0101 for the full trace
+     * and why this affects real playback correctness (CheckLoopAndStop
+     * natural-end), not just seeking. PT1/PT2/GTR/FLS/STC/STP/FXM/PSM/
+     * ASC/ASC0/FTC/PSC/SQT are ALSO `type=AY` in the same resource and
+     * so ALSO have real Global_Tick_Max in the original via their own
+     * GetTimeXXX routines (GetTimePT1/GetTimePT2/GetTimeSTC/etc,
+     * Players.pas:17001-17037) - none of those are ported yet, tracked
+     * as open debt in MIG-0101 pending the same treatment PT3 got here. */
+    case PLAYER_FORMAT_PT3:
+      *counter = p->as.pt3.global_tick_counter;
+      *max = p->as.pt3.global_tick_max;
+      return true;
     case PLAYER_FORMAT_PT1:
     case PLAYER_FORMAT_PT2:
-    case PLAYER_FORMAT_PT3:
     case PLAYER_FORMAT_GTR:
     case PLAYER_FORMAT_FLS:
     case PLAYER_FORMAT_STC:
@@ -550,7 +590,6 @@ bool player_get_tick_position(const player* p, int64_t* counter,
     case PLAYER_FORMAT_FTC:
     case PLAYER_FORMAT_PSC:
     case PLAYER_FORMAT_SQT:
-    case PLAYER_FORMAT_SNDH:
     case PLAYER_FORMAT_UNKNOWN:
     default:
       return false;
@@ -577,6 +616,18 @@ double player_get_seconds_per_tick(const player* p) {
     case PLAYER_FORMAT_VTX:
       if (p->as.vtx.interrupt_freq <= 0.0) return 0.0;
       return 1000.0 / p->as.vtx.interrupt_freq;
+    /* MIG-0100: SNDH ticks are VBL interrupts at play_freq Hz (no *1000
+     * pre-scaling like YM/VTX's interrupt_freq - play_freq is a plain
+     * Hz value, sndh.pas's own PlayFreq). */
+    case PLAYER_FORMAT_SNDH:
+      if (p->as.sndh.play_freq <= 0) return 0.0;
+      return 1.0 / p->as.sndh.play_freq;
+    /* MIG-0101: PT3 always plays at a fixed 50Hz interrupt rate (no
+     * per-file override, unlike YM/VTX/SNDH's own stored rate) -
+     * PT3_FILE_INTERRUPT_FREQ_DEF is a plain #define, not a file field,
+     * so this is a constant, same *1000-prescaled convention as YM/VTX. */
+    case PLAYER_FORMAT_PT3:
+      return 1000.0 / PT3_FILE_INTERRUPT_FREQ_DEF;
     default:
       return 0.0;
   }

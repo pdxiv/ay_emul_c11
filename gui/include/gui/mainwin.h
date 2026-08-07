@@ -11,6 +11,7 @@
 #include "gui/playback.h"
 #include "gui/playlist_win.h"
 #include "gui/skin.h"
+#include "gui/ticker.h"
 #include "gui/tools_win.h"
 #include "gui/visualizer.h"
 #include "gui/zones.h"
@@ -57,6 +58,22 @@ typedef struct gui_mainwin {
 
   bool dragging_vol;
   bool dragging_progr;
+  gui_button* pressed_button; /* MainWin.pas: TButtZone's per-frame
+                                * Push/UnPush during a drag (FormMouseMove:
+                                * "if Touche(X,Y) then Push else UnPush") -
+                                * the button currently held down by the
+                                * mouse, if any (NULL otherwise). Kept
+                                * pushed-looking (and only fires its
+                                * action on release) while the cursor
+                                * stays over it; moving off before
+                                * releasing un-pushes it and cancels the
+                                * click, matching the original's own
+                                * press-and-drag-off-to-cancel affordance
+                                * - a real gap in this port until this
+                                * field was added (every button previously
+                                * fired unconditionally on release,
+                                * regardless of where the mouse ended up,
+                                * and never visually un-pushed either). */
   bool do_loop; /* ButLoop toggle - MainWin.pas: Do_Loop, restarts the
                   * same (sub)song from the top on natural end instead
                   * of stopping, see on_timer */
@@ -82,6 +99,23 @@ typedef struct gui_mainwin {
    * FrmMain.DefaultDirectory's own initial empty-string state. */
   char default_dir[1024]; /* Tools.pas: EMFolder */
   int vis_period_ms;       /* Tools.pas: EVisPeriod/VisTimerPeriod */
+
+  gui_ticker ticker;    /* MainWin.pas: the scroll-text ticker - see
+                          * gui/include/gui/ticker.h (MIG-0098) */
+  int ticker_last_index; /* the gui_playlist_win model index the ticker
+                           * last targeted - MainWin.pas: Item_Displayed,
+                           * compared against the newly-loaded entry's
+                           * own index each do_load_song to decide
+                           * whether this is a Next/Prev-adjacent step
+                           * (animates) or an arbitrary jump (snaps) -
+                           * see ticker.h's own file comment. -1 = none
+                           * yet. */
+  bool ticker_dragging; /* MainWin.pas: MoveScr.Clicked */
+  int ticker_drag_last_x; /* MainWin.pas: MoveScr.OldX - app-local x of
+                            * the last motion event during a ticker
+                            * drag, so on_motion can compute PosX
+                            * (the delta gui_ticker_drag expects)
+                            * itself */
 } gui_mainwin;
 
 /* Tools.pas: EVisPeriod's EditingDone -> FrmMain.SetVisTimerPeriod

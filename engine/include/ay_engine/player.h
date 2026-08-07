@@ -244,17 +244,21 @@ ay_engine* player_ay_engine(player* p);
  * gui/src/playback.c's gui_playback_request_seek for the C11 port of
  * RerollMusic's own decode-and-discard algorithm.
  *
- * Returns true (with real values) for only AY/YM/VTX - the sole three
- * formats whose C11 struct actually carries a global_tick_max field.
- * False (both outputs left at 0) for every other format: SNDH (a
- * separate Atari-VBL-based position model, not unified here - see
- * MIG-0017); PT1/PT2/PT3/GTR/FLS/STC/STP/FXM (each of these DOES have
- * a real declared song length in its own file format, e.g. PT3.pas's
- * GetTimePT3, but computing it was already a deliberate, separately-
- * recorded earlier scope decision - "UI-only, not needed [for audio
- * correctness]" - not something this entry revisits); PSM/ASC/ASC0/
- * FTC/PSC/SQT (these loop indefinitely via a position-based loop point
- * in the file, genuinely no fixed song length to have skipped). */
+ * Returns true (with real values) for AY/YM/VTX/SNDH/PT3 - the five
+ * formats whose C11 struct actually carries a total-tick-count field
+ * (SNDH's is atari_emulate::tick_count/tick_count_max, populated from
+ * its own TIME tag by sndh_file_load - MIG-0100; PT3's is pt3_file's
+ * own global_tick_counter/global_tick_max, populated by a faithful
+ * port of GetTimePT3 - MIG-0101, see pt3_file.h). Both were previously
+ * left unbounded/unwired on the mistaken assumption that no comparable
+ * total existed. False (both outputs left at 0) for every other
+ * format: PT1/PT2/GTR/FLS/STC/STP/FXM/PSM/ASC/ASC0/FTC/PSC/SQT -
+ * MIG-0101's own investigation (extracting the original's FILETYPES
+ * resource) found ALL of these are ALSO `type=AY` and so ALSO have a
+ * real GetTimeXXX-computed Global_Tick_Max in the original (Players.
+ * pas:17001-17037's dispatch), same as PT3 - this is open, tracked
+ * debt (see migration_debt.yaml MIG-0101), not a settled scope
+ * decision; PT3 was ported first as a pilot/template for the rest. */
 bool player_get_tick_position(const player* p, int64_t* counter,
                                int64_t* max);
 
@@ -312,10 +316,27 @@ void player_set_player_freq(player* p, int freq_hz_x1000);
 int player_make_buffer(player* p, int16_t* buf, int buffer_length);
 
 /* True once the loaded format's own real_end_all flag is set (AY/YM/
- * SNDH/VTX); PT3 has no such concept (see pt3_file.h) and this always
- * returns false for it - callers relying solely on this to stop PT3
- * playback will run forever, hence ay_player's --seconds bound. */
+ * SNDH/VTX/PT3 - MIG-0101 added PT3, see pt3_file.h); every other
+ * tracker format still has no such concept and this always returns
+ * false for them - callers relying solely on this to stop playback for
+ * those will run forever, hence ay_player's --seconds bound. */
 bool player_real_end_all(const player* p);
+
+/* Sets the loaded format's own do_loop flag (a no-op for formats with
+ * no such field, e.g. every format player_real_end_all always returns
+ * false for) - Players.pas: Do_Loop (settings.pas, default false).
+ * When true, CheckLoopAndStop-equivalent logic (see e.g. pt3_file.c's
+ * pt3_file_make_buffer, MIG-0101) clamps the tick counter at its max
+ * instead of ever setting real_end_all, so playback never stops on its
+ * own - used by ay_player's --ignore-end (MIG-0101's own PT3 test
+ * fix) and tests/oracle_diff/dump_engine_state.c's pt3_file scenario,
+ * both matching OracleHarness.pas's RunPT3FileTest's own sentinel-
+ * Global_Tick_Max bypass (see main.c's --ignore-end comment for the
+ * full why). gui/src/playback.c never calls this - real interactive
+ * playback keeps do_loop at its real default (false), matching the
+ * original's own default and this port's separate, GUI-level Loop
+ * button (MainWin.pas: ButLoop) implementation. */
+void player_set_do_loop(player* p, bool do_loop);
 
 /* Frees any owned allocation for formats that have one (YM/SNDH/VTX);
  * a no-op for AY/PT3 (which own none) and for PLAYER_FORMAT_UNKNOWN. */
