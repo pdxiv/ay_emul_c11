@@ -24,6 +24,11 @@ engine/third_party/musashi/m68kops.c
 engine/third_party/musashi/m68kops.h
 engine/third_party/musashi/m68kmake
 
+# gui/Makefile code-generates these from gui/assets/*.{ays,bmp} at
+# build time (gui/tools/gen_bin_c.sh) - binary assets are checked in
+# directly, the C array wrapping them is not.
+gui/build/
+
 # Editor/OS cruft
 *.swp
 *.swo

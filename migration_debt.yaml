@@ -5504,3 +5504,104 @@ entries:
         a deliberate, disclosed divergence favoring 'audio still
         works' over exact error-path fidelity for this specific
         failure mode."
+
+  - id: MIG-0102
+    title: "GUI: real per-pixel alpha channel support for skin bitmaps - a deliberate C11-only enhancement beyond the original (which has no true alpha, only fixed-color-key transparency), fully backwards compatible with existing skins"
+    subsystem: gui/zones
+    state: validated
+    summary: >
+      User-requested enhancement, not a porting gap: the original
+      Delphi `TBitmap` has no real alpha channel at all - the only
+      transparency it supports is `TransparentMode := tmFixed`, a
+      single fixed color key treated as fully transparent
+      (TMoveZone.AddBitmaps, MainWin.pas:2676-2681, already ported as
+      `draw_pixbuf_region_keyed`'s color-key path). This entry adds
+      genuine per-pixel alpha compositing on top of that, entirely
+      opt-in and additive.
+
+      Investigated before implementing: (1) confirmed empirically that
+      GdkPixbuf's own BMP loader (already used unconditionally by
+      gui/src/skin.c and gui/src/dialogs/about.c) correctly parses
+      32-bit alpha BMPs with no code changes needed - a synthetic
+      4x4 32bpp alpha-BMP test file loaded with `has_alpha=1`,
+      `n_channels=4`, and correct per-pixel alpha values. (2) Found
+      that every "plain" blit in this codebase (every button,
+      both LEDs, and About's whole base image, all via
+      `gdk_cairo_set_source_pixbuf`+`cairo_fill`) is ALREADY alpha-
+      correct for free - Cairo composites a pixbuf's real alpha
+      channel automatically, no changes needed there either. (3) The
+      only hand-rolled compositing in the whole GUI is
+      `draw_pixbuf_region_keyed` (zones.c, used exclusively by the
+      volume/progress slider handles), which read only 3 (R/G/B)
+      channels and ignored a 4th if present - the one real code change
+      needed.
+
+      Fix: `draw_pixbuf_region_keyed` now checks `gdk_pixbuf_get_has_
+      alpha()`; if true, it uses the source's real per-pixel alpha
+      directly (color-keying is skipped entirely - the artist already
+      expressed transparency explicitly) instead of the color-key
+      test, premultiplying into Cairo's required ARGB32 format. If
+      false (every existing skin, including the bundled default,
+      which is a plain 24-bit BMP), the function takes the exact same
+      branch and does the exact same math as before this entry -
+      confirmed byte-for-byte via a dedicated pixel-level test (see
+      verification).
+
+      `.ays` container parsing (gui/src/skin.c) needed NO changes at
+      all - it already hands the embedded BMP's raw bytes straight to
+      GdkPixbufLoader regardless of bit depth, so an alpha-channel BMP
+      just works once embedded the same way a 24-bit one is.
+    rationale: >
+      Explicit user request, scoped down from a broader "add alpha
+      support" ask to the one place that actually needed code (per the
+      investigation above) rather than speculatively touching paths
+      that were already correct - avoids unnecessary churn in
+      already-working, oracle-adjacent rendering code.
+    verification: >
+      `cd gui && make clean && make` (full clean rebuild, including
+      `rm -rf build`): zero warnings, zero errors. Full regression
+      suite green and unaffected (engine untouched by this GUI-only
+      change): run_diff.sh, corpus_wav_md5_sweep.sh (75/0/1-known/0),
+      smoke_test.sh, engine_smoke (9/9).
+
+      A dedicated standalone pixel-level test (#including zones.c
+      directly to reach the static function, matching this project's
+      existing test_about_bmp.c-style harness convention; not checked
+      in, scratch verification only) constructed synthetic GdkPixbufs
+      in memory and asserted exact output pixels: an opaque alpha
+      pixel composites unchanged (0xFFFF0000 for pure red, confirming
+      the premultiply math is a no-op at alpha=255); a half-alpha
+      pixel produces the correctly premultiplied ARGB value
+      (0x80008000 for half-alpha green); a fully-transparent alpha
+      pixel produces exactly 0x00000000; and - critically - a 3-
+      channel (no-alpha) pixbuf still produces byte-identical output
+      to the pre-existing color-key behavior (key-color pixel and a
+      pixel matching it both -> 0x00000000, a distinct color ->
+      fully opaque 0xFF008040), proving zero regression for every
+      existing skin. All 6 checks passed.
+
+      Separately, the existing bundled default skin (24-bit, color-
+      key only) was loaded in the real running GUI and screenshotted -
+      renders pixel-identical to before this entry, confirming the
+      has_alpha=false path is genuinely unaffected end-to-end, not
+      just in the isolated unit test.
+    debt:
+      - "Not yet exercised end-to-end with a REAL 32-bit-alpha .ays
+        skin through the actual file-loading path - engine/src/util/
+        lh5.c only implements LZH-5 decompression (no encoder, see
+        MIG's own earlier entries and docs/creating_custom_skins.md),
+        so no compressed alpha-channel .ays test fixture could be
+        built this session. Verified instead via (a) a direct pixel-
+        level test of the compositing function itself and (b) an
+        empirical GdkPixbuf-BMP-loader alpha-parsing check on a raw
+        (uncompressed) 32-bit BMP - the combination covers the same
+        code path in two pieces, but not as one unbroken integration
+        test through a real .ays file."
+      - "gui/src/ticker.c's own separate raw-pixel AND-mask compositing
+        (used only for the scrolling song-title text, not for any
+        skin-authored sprite) was deliberately left unchanged - it
+        reads the skin's RGB bytes to darken them under text, and
+        doesn't composite a skin-authored transparent sprite the way
+        zones.c's slider-handle code does, so there was nothing
+        alpha-shaped to add there. Documented here rather than left
+        silently unexamined."

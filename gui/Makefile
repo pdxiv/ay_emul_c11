@@ -24,13 +24,25 @@ INCLUDES = -Iinclude -I$(ENGINE_DIR)/include \
 LIBS = $(ENGINE_DIR)/libayengine.a $(GTK_LIBS) -lasound -lm
 
 BIN = ay_emul_gui
+
+# Binary assets (skin, About-box bitmap) live as real files under
+# assets/ - not hand-editable source, so diffing/reviewing/swapping
+# them doesn't mean wading through a 6000+/39000+ line byte-array
+# dump. gen_bin_c.sh turns each into the equivalent `const unsigned
+# char gui_X[]`/`gui_X_len` C definition at build time, landing in
+# GEN_DIR (gitignored - regenerated every build, never checked in).
+GEN_DIR = build/generated
+GEN_TOOL = tools/gen_bin_c.sh
+GEN_SRC = $(GEN_DIR)/default_skin.c $(GEN_DIR)/about_bitmap.c
+
 # alsa_output.c is reused directly from tools/ay_player/src/ - no
 # code duplication, no promotion to engine/ (engine/ is deliberately
 # audio-output-agnostic, see PORTING_TO_C11_LINUX.md's phase-1 scope).
-SRC = $(wildcard src/*.c) $(wildcard src/dialogs/*.c) $(AY_PLAYER_DIR)/src/alsa_output.c
+SRC = $(wildcard src/*.c) $(wildcard src/dialogs/*.c) $(AY_PLAYER_DIR)/src/alsa_output.c $(GEN_SRC)
 OBJ = $(SRC:.c=.o)
 
 .PHONY: all clean
+.DEFAULT_GOAL := all
 
 all: $(BIN)
 
@@ -39,6 +51,15 @@ $(BIN): $(OBJ) $(ENGINE_DIR)/libayengine.a
 
 $(ENGINE_DIR)/libayengine.a:
 	$(MAKE) -C $(ENGINE_DIR)
+
+# Generated from assets/ at build time - see the GEN_DIR comment above.
+$(GEN_DIR)/default_skin.c: assets/default_skin.ays $(GEN_TOOL)
+	@mkdir -p $(GEN_DIR)
+	$(GEN_TOOL) assets/default_skin.ays $@
+
+$(GEN_DIR)/about_bitmap.c: assets/about.bmp $(GEN_TOOL)
+	@mkdir -p $(GEN_DIR)
+	$(GEN_TOOL) assets/about.bmp $@
 
 # -MMD -MP: see engine/Makefile's own comment - same rationale, same
 # bug class this prevents (a shared header edit silently leaving a
@@ -50,3 +71,4 @@ $(ENGINE_DIR)/libayengine.a:
 
 clean:
 	rm -f $(BIN) $(OBJ) $(OBJ:.o=.d)
+	rm -rf $(GEN_DIR)

@@ -23,13 +23,25 @@ static void draw_pixbuf_region(cairo_t* cr, GdkPixbuf* skin, int src_x,
  * than drawn. Cairo has no color-key compositing primitive, so this
  * builds a small ARGB32 surface by hand (same raw-pixel technique as
  * gui/src/ticker.c's AND-mask rendering) with alpha=0 on key-color
- * pixels, alpha=255 elsewhere, then paints that. */
+ * pixels, alpha=255 elsewhere, then paints that.
+ *
+ * C11-only enhancement, not present in the original (Delphi's TBitmap
+ * has no real alpha channel, only this fixed-color-key trick): if the
+ * skin bitmap actually carries a real alpha channel (a 32-bit BMP,
+ * `gdk_pixbuf_get_has_alpha`), that per-pixel alpha is used directly
+ * instead of the color-key test - a skin author can then paint real
+ * soft/antialiased edges on a handle instead of a hard-cut silhouette.
+ * A plain 24-bit skin (no alpha channel) reports has_alpha=false and
+ * takes the exact same color-key path as before, byte-for-byte -
+ * existing skins are entirely unaffected. See docs/
+ * creating_custom_skins.md's "Alpha channel support" section. */
 static void draw_pixbuf_region_keyed(cairo_t* cr, GdkPixbuf* skin,
                                       int src_x, int src_y, int w, int h,
                                       int dest_x, int dest_y) {
   int rowstride = gdk_pixbuf_get_rowstride(skin);
   int nch = gdk_pixbuf_get_n_channels(skin);
   guchar* pixels = gdk_pixbuf_get_pixels(skin);
+  bool has_alpha = gdk_pixbuf_get_has_alpha(skin) && nch >= 4;
   guchar* key = pixels + (size_t)src_y * rowstride + (size_t)src_x * nch;
   guchar kr = key[0], kg = key[1], kb = key[2];
 
@@ -45,10 +57,23 @@ static void draw_pixbuf_region_keyed(cairo_t* cr, GdkPixbuf* skin,
       guchar r = srow[xx * nch + 0];
       guchar g = srow[xx * nch + 1];
       guchar b = srow[xx * nch + 2];
-      drow[xx] = (r == kr && g == kg && b == kb)
-                     ? 0u
-                     : (0xFFu << 24) | ((uint32_t)r << 16) |
-                           ((uint32_t)g << 8) | (uint32_t)b;
+      guchar a;
+      if (has_alpha) {
+        a = srow[xx * nch + 3];
+      } else {
+        a = (r == kr && g == kg && b == kb) ? 0 : 255;
+      }
+      if (a == 0) {
+        drow[xx] = 0u;
+      } else {
+        /* Cairo's ARGB32 format is premultiplied - a no-op when a=255
+         * (matches the old color-key-only math exactly), a real
+         * scale-down for partial alpha. */
+        uint32_t pr = (uint32_t)r * a / 255u;
+        uint32_t pg = (uint32_t)g * a / 255u;
+        uint32_t pb = (uint32_t)b * a / 255u;
+        drow[xx] = ((uint32_t)a << 24) | (pr << 16) | (pg << 8) | pb;
+      }
     }
   }
   cairo_surface_mark_dirty(surf);
