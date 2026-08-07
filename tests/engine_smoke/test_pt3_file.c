@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ay_engine/pt3_file.h"
+#include "ay_engine/formats/pt3_file.h"
 
 static uint8_t* read_whole_file(const char* path, size_t* out_size) {
   FILE* f = fopen(path, "rb");
@@ -54,20 +54,29 @@ static void test_plays(const char* path) {
   printf("test_plays(%s): OK (%d sample frames)\n", path, frames_total);
 }
 
-static void test_bad_header_rejected(void) {
-  uint8_t garbage[300];
+/* NOT testing PT3_FILE_ERR_BAD_HEADER here (on purpose, not an
+ * oversight) - pt3_file.h's own enum comment explains why nothing can
+ * actually trigger it: PT3's text signature is Tier-C-only in real
+ * Pascal, never checked at load time, and real corpus files exist
+ * (DIABOLIS_IN_MUSICA.pt3) that fail it entirely yet load and play
+ * correctly - a load-time signature check was tried and reverted for
+ * exactly that reason. Truncation (PT3_FILE_ERR_TRUNCATED) IS real
+ * Pascal-equivalent validation (Players.pas' own buffer-size guards),
+ * so that's what this actually tests. */
+static void test_truncated_rejected(void) {
+  uint8_t garbage[100]; /* below the 202-byte minimum header size */
   memset(garbage, 0, sizeof(garbage));
   pt3_file f;
   pt3_file_status st = pt3_file_load(&f, garbage, sizeof(garbage),
                                       PT3_FILE_SAMPLE_RATE_DEF);
-  assert(st == PT3_FILE_ERR_BAD_HEADER);
-  printf("test_bad_header_rejected: OK\n");
+  assert(st == PT3_FILE_ERR_TRUNCATED);
+  printf("test_truncated_rejected: OK\n");
 }
 
 int main(void) {
   test_plays("../../test_corpus_76/ZAGON_07_remixDJ_EchoMAKROSS.pt3");
   test_plays("../../test_corpus_76/ZELiNAPI.pt3");
-  test_bad_header_rejected();
+  test_truncated_rejected();
   printf("All pt3_file smoke tests passed.\n");
   return 0;
 }

@@ -30,8 +30,8 @@
 #include <string.h>
 
 #include "ay_engine/player.h"
-#include "player/alsa_output.h"
-#include "player/wav.h"
+#include "ay_player/alsa_output.h"
+#include "ay_player/wav.h"
 
 #define SAMPLE_RATE 48000
 #define CHANNELS 2

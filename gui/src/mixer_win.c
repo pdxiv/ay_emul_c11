@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "ay_engine/player.h"
-#include "mxhelper.h"
+#include "gui/dialogs/mxhelper.h"
 
 /* Applies AL/AR/BL/BR/CL/CR and chip_type on every slider/radio change,
  * matching MainWin.pas's Set_Mode_Manual ("assign fields, then

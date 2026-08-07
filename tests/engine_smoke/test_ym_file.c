@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ay_engine/ym_file.h"
+#include "ay_engine/formats/ym_file.h"
 
 static uint8_t* read_whole_file(const char* path, size_t* out_size) {
   FILE* f = fopen(path, "rb");

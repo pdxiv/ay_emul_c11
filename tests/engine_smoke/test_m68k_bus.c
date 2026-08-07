@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "ay_engine/m68k_bus.h"
+#include "ay_engine/hw/m68k_bus.h"
 #include "m68k.h"
 
 static void test_moveq_add(void) {

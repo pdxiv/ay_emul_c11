@@ -12,7 +12,7 @@
 #endif
 #include <alsa/asoundlib.h>
 
-#include "player/alsa_output.h"
+#include "ay_player/alsa_output.h"
 
 #include <stdio.h>
 #include <stdlib.h>

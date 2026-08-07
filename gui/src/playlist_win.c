@@ -10,8 +10,8 @@
 #include <string.h>
 #include <strings.h>
 
-#include "itemedit.h"
-#include "progbox.h"
+#include "gui/dialogs/itemedit.h"
+#include "gui/dialogs/progbox.h"
 
 enum { COL_DISPLAY = 0, COL_INDEX, NUM_COLS };
 

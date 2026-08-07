@@ -29,7 +29,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "ay_engine/ay.h"
+#include "ay_engine/hw/ay.h"
 
 /* MainWin.pas:43-54. */
 #define GUI_VIS_SPA_NUM 63 /* 91 - 26 - 2 */

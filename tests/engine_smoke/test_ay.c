@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "ay_engine/ay.h"
+#include "ay_engine/hw/ay.h"
 
 static void test_register_masking(void) {
   ay_chip chip;

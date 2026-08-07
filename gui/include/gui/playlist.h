@@ -27,7 +27,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "ay_engine/ay.h"
+#include "ay_engine/hw/ay.h"
 #include "ay_engine/player.h"
 
 /* ItemEdit.pas's real per-item overrides (MIG-0088 - see its own

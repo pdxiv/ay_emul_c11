@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ay_engine/sndh_file.h"
+#include "ay_engine/formats/sndh_file.h"
 
 static uint8_t* read_whole_file(const char* path, size_t* out_size) {
   FILE* f = fopen(path, "rb");

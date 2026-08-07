@@ -18,7 +18,7 @@ ENGINE_DIR = ../engine
 AY_PLAYER_DIR = ../tools/ay_player
 GTK_CFLAGS = $(shell pkg-config --cflags gtk+-2.0)
 GTK_LIBS = $(shell pkg-config --libs gtk+-2.0)
-INCLUDES = -Iinclude -Idialogs -I$(ENGINE_DIR)/include \
+INCLUDES = -Iinclude -I$(ENGINE_DIR)/include \
            -I$(ENGINE_DIR)/third_party/z80 -I$(ENGINE_DIR)/third_party/musashi \
            -I$(AY_PLAYER_DIR)/include $(GTK_CFLAGS)
 LIBS = $(ENGINE_DIR)/libayengine.a $(GTK_LIBS) -lasound -lm
@@ -27,7 +27,7 @@ BIN = ay_emul_gui
 # alsa_output.c is reused directly from tools/ay_player/src/ - no
 # code duplication, no promotion to engine/ (engine/ is deliberately
 # audio-output-agnostic, see PORTING_TO_C11_LINUX.md's phase-1 scope).
-SRC = $(wildcard src/*.c) $(wildcard dialogs/*.c) $(AY_PLAYER_DIR)/src/alsa_output.c
+SRC = $(wildcard src/*.c) $(wildcard src/dialogs/*.c) $(AY_PLAYER_DIR)/src/alsa_output.c
 OBJ = $(SRC:.c=.o)
 
 .PHONY: all clean

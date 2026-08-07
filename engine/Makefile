@@ -21,12 +21,13 @@ INCLUDES = -Iinclude -Ithird_party/z80 -Ithird_party/musashi
 MUSASHI_DIR = third_party/musashi
 MUSASHI_GEN = $(MUSASHI_DIR)/m68kops.c $(MUSASHI_DIR)/m68kops.h
 
-SRC = src/ay.c src/z80_bus.c src/m68k_bus.c src/mfp.c src/dma_sound.c \
-      src/atari_emulate.c src/trace_log.c src/ay_file.c src/lh5.c src/ym_file.c src/pt3_file.c \
-      src/sndh_file.c src/vtx_file.c src/pt1_file.c src/gtr_file.c \
-      src/fls_file.c src/stc_file.c src/stp_file.c src/pt2_file.c \
-      src/fxm_file.c src/psm_file.c src/asc_file.c src/ftc_file.c \
-      src/psc_file.c src/sqt_file.c src/player.c \
+SRC = src/hw/ay.c src/hw/z80_bus.c src/hw/m68k_bus.c src/hw/mfp.c src/hw/dma_sound.c \
+      src/hw/atari_emulate.c src/util/trace_log.c src/util/lh5.c \
+      src/formats/ay_file.c src/formats/ym_file.c src/formats/pt3_file.c \
+      src/formats/sndh_file.c src/formats/vtx_file.c src/formats/pt1_file.c src/formats/gtr_file.c \
+      src/formats/fls_file.c src/formats/stc_file.c src/formats/stp_file.c src/formats/pt2_file.c \
+      src/formats/fxm_file.c src/formats/psm_file.c src/formats/asc_file.c src/formats/ftc_file.c \
+      src/formats/psc_file.c src/formats/sqt_file.c src/player.c \
       third_party/z80/z80.c \
       $(MUSASHI_DIR)/m68kcpu.c $(MUSASHI_DIR)/m68kdasm.c \
       $(MUSASHI_DIR)/m68kops.c $(MUSASHI_DIR)/softfloat/softfloat.c

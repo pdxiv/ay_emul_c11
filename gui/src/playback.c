@@ -7,7 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "player/alsa_output.h"
+#include "ay_player/alsa_output.h"
 
 #define GUI_PLAYBACK_BUF_FRAMES 2048
 

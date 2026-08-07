@@ -31,9 +31,9 @@
 #include "gui/playlist_win.h"
 #include "gui/regions.h"
 #include "ay_engine/player.h"
-#include "about.h"
-#include "jmptime.h"
-#include "mxhelper.h"
+#include "gui/dialogs/about.h"
+#include "gui/dialogs/jmptime.h"
+#include "gui/dialogs/mxhelper.h"
 
 /* MainWin.pas:40-41. */
 #define MW_WIDTH 358

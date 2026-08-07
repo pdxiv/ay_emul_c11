@@ -5,9 +5,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "ay_engine/atari_emulate.h"
-#include "ay_engine/dma_sound.h"
-#include "ay_engine/mfp.h"
+#include "ay_engine/hw/atari_emulate.h"
+#include "ay_engine/hw/dma_sound.h"
+#include "ay_engine/hw/mfp.h"
 #include "m68k.h"
 
 /* atari.pas:44,1580-1586 */
@@ -37,9 +37,18 @@ static void test_mfp_timer_countdown_and_fire(void) {
   mfp_write_byte_at(&m, 0xFFFA07, 32, od); /* IERA = register 3, enable bit 32 (A) */
   mfp_write_byte_at(&m, 0xFFFA13, 32, od); /* IMRA = register 9, mask bit 32 (A) */
 
-  /* Advance exactly to expiry. */
+  /* Advance exactly to expiry. atari.pas:1467,1477-1481 (EmulateTimer):
+   * in automatic end-of-interrupt mode (VCR&8=0, the reset default, and
+   * still the case here - VCR was never written), the IPA bit is set
+   * then IMMEDIATELY cleared again once the level-6 request is
+   * successfully latched, within this same call - it's transient, not
+   * observable after the fact. mfp_irq_pending() (level6_pending) is
+   * the real "did it fire" signal in this mode, confirmed by direct
+   * comparison against the Pascal source (see MIG-0051). This
+   * assertion previously (incorrectly) expected the IPA bit to still
+   * be set here. */
   next = mfp_emulate_timer(&m, 0, expected_period);
-  assert((m.reg[5] & 32) != 0); /* IPA bit set - timer fired */
+  assert((m.reg[5] & 32) == 0); /* IPA bit already auto-cleared */
   assert(mfp_irq_pending(&m));
   /* Always reloads (atari.pas:1423-1425): next event is one full period out. */
   assert(next == expected_period);

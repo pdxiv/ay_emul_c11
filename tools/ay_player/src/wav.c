@@ -1,4 +1,4 @@
-#include "player/wav.h"
+#include "ay_player/wav.h"
 
 #include <string.h>
 

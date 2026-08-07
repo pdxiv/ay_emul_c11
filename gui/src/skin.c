@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ay_engine/lh5.h"
+#include "ay_engine/util/lh5.h"
 
 /* gui/src/default_skin.c - generated from ay_emul/Ay_Emul2.ays, see that
  * file's own header comment for how to regenerate it. */
