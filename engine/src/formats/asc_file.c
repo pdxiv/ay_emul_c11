@@ -52,6 +52,130 @@ static void copy_fixed_field(const uint8_t* src, size_t src_size,
   if (start > 0) memmove(out, out + start, n - start + 1);
 }
 
+/* Players.pas:15042-15182, GetTimeASC's PatInt-equivalent nested case-scan
+ * for one channel's opcode stream, one "note-or-rest" event at a time.
+ * `check_end` is true only for channel 1 (j1): it alone detects "no more
+ * pattern data" (a raw 255 byte) and signals the caller to stop the whole
+ * row-walk for THIS position (move on to the next position in the outer
+ * loop) - matching the original exactly (channels 2/3 have no such check
+ * in the original source, only channel 1's `if Index[j1] = 255 then
+ * break;`). Unlike the original (which has no per-scan bounds/iteration
+ * guard at all here), this adds an iteration cap so a hostile/corrupt
+ * file can never hang - see this port's file-level safety note below. */
+typedef enum {
+  ASC_TIME_CONTINUE,
+  ASC_TIME_END_OF_POSITION,
+  ASC_TIME_ERROR,
+} asc_time_result;
+
+static asc_time_result asc_time_channel_step(const uint8_t* d, uint32_t* j,
+                                              int* a, int8_t* a1x, uint8_t* b,
+                                              bool* env, bool check_end) {
+  int64_t budget = 1 << 20; /* MIG safety cap - not in the original */
+
+  (*a)--;
+  if (*a >= 0) return ASC_TIME_CONTINUE;
+  if (check_end && rb(d, *j) == 255) return ASC_TIME_END_OF_POSITION;
+
+  for (;;) {
+    if (--budget < 0) return ASC_TIME_ERROR;
+    uint8_t op = rb(d, *j);
+    if (op <= 0x55) {
+      *a = *a1x;
+      *j = (*j + 1) & 0xFFFF;
+      if (*env) *j = (*j + 1) & 0xFFFF;
+      return ASC_TIME_CONTINUE;
+    } else if (op <= 0x5f) {
+      *a = *a1x;
+      *j = (*j + 1) & 0xFFFF;
+      return ASC_TIME_CONTINUE;
+    } else if (op <= 0x9f) {
+      *a1x = (int8_t)(op - 0x60);
+    } else if (op == 0xe0) {
+      *env = true;
+    } else if (op <= 0xef) {
+      *env = false;
+    } else if (op == 0xf0 || op == 0xf5 || op == 0xf6 || op == 0xf7 ||
+               op == 0xf9 || op == 0xfb) {
+      *j = (*j + 1) & 0xFFFF;
+    } else if (op == 0xf4) {
+      *j = (*j + 1) & 0xFFFF;
+      *b = rb(d, *j);
+    }
+    *j = (*j + 1) & 0xFFFF;
+  }
+}
+
+/* Players.pas:15042-15182, GetTimeASC - computes the song's total duration
+ * (Tm) and loop-point tick (Lp) in the same "global tick" units
+ * global_tick_counter uses, by walking the known position list exactly
+ * once (no audio synthesis). DLCatcher (16384) is a single counter shared
+ * across the WHOLE song (not reset per position - confirmed by reading
+ * `b := ASC1_Delay; DLCatcher := 16384;` sitting BEFORE the `for i := 0
+ * to ASC1_Number_Of_Positions - 1 do` loop in the original). On a
+ * malformed file (DLCatcher exhausted, matching the original's own
+ * RaiseBadFileStructure, or this port's own added per-scan iteration cap
+ * tripping), returns 0/0 rather than raising - asc_file_load has already
+ * succeeded by the time this runs, so a duration-precompute failure
+ * degrades to "no known duration" rather than failing the whole load. */
+static void asc_get_time(const asc_file* f, int64_t* out_tm,
+                          int64_t* out_lp) {
+  const uint8_t* d = f->data;
+  int64_t tm = 0, lp = 0;
+  uint8_t b = f->delay;
+  int a1 = 0, a2 = 0, a3 = 0;
+  int8_t a11 = 0, a22 = 0, a33 = 0;
+  bool env1 = false, env2 = false, env3 = false;
+  int dl_catcher = 16384;
+  int pos;
+
+  for (pos = 0; pos < f->number_of_positions; pos++) {
+    uint32_t j1, j2, j3, base;
+    uint8_t patnum;
+
+    if (f->looping_position == pos) lp = tm;
+
+    patnum = rb(d, 9u + (uint32_t)pos);
+    base = f->patterns_pointer + (uint32_t)patnum * 6u;
+    j1 = (uint32_t)(rd16(d, base) + f->patterns_pointer) & 0xFFFF;
+    j2 = (uint32_t)(rd16(d, base + 2) + f->patterns_pointer) & 0xFFFF;
+    j3 = (uint32_t)(rd16(d, base + 4) + f->patterns_pointer) & 0xFFFF;
+
+    for (;;) {
+      asc_time_result r1 =
+          asc_time_channel_step(d, &j1, &a1, &a11, &b, &env1, true);
+      if (r1 == ASC_TIME_ERROR) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+      if (r1 == ASC_TIME_END_OF_POSITION) break;
+
+      if (asc_time_channel_step(d, &j2, &a2, &a22, &b, &env2, false) ==
+          ASC_TIME_ERROR) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+      if (asc_time_channel_step(d, &j3, &a3, &a33, &b, &env3, false) ==
+          ASC_TIME_ERROR) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+
+      tm += b;
+      if (--dl_catcher < 0) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+    }
+  }
+  *out_tm = tm;
+  *out_lp = lp;
+}
+
 /* ModTypes variant 2 (Players.pas:116-119, the ASC1 layout every FT.ASC/
  * FT.ASC0 file is normalized to): ASC1_Delay@0 ASC1_LoopingPosition@1
  * ASC1_PatternsPointers@2 (word) ASC1_SamplesPointers@4 (word)
@@ -131,12 +255,17 @@ asc_file_status asc_file_load(asc_file* f, const uint8_t* data, size_t size,
 
   f->current_position = 0;
   f->global_tick_counter = 0;
+  f->global_tick_max = 0;
+  f->loop_tick = 0;
+  f->do_loop = false;
+  f->real_end_all = false;
+  asc_get_time(f, &f->global_tick_max, &f->loop_tick); /* MIG-0101-style */
 
   return ASC_FILE_OK;
 }
 
 /* Players.pas:9713-9887, PatternInterpreter. */
-static void pattern_interpreter(asc_file* f, asc_channel* chan) {
+static void pattern_interpreter(asc_file* f, ay_chip* chip, asc_channel* chan) {
   bool init_sample_disabled = false;
   bool init_ornament_disabled = false;
   bool quit = false;
@@ -170,7 +299,7 @@ static void pattern_interpreter(asc_file* f, asc_channel* chan) {
         chan->addition_to_note = 0;
       }
       if (chan->envelope_enabled) {
-        f->ay.chip.reg[11] = rb(f->data, (uint32_t)chan->address_in_pattern + 1);
+        chip->reg[11] = rb(f->data, (uint32_t)chan->address_in_pattern + 1);
         chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
       }
       quit = true;
@@ -249,9 +378,9 @@ static void pattern_interpreter(asc_file* f, asc_channel* chan) {
       chan->current_ton_sliding = (int16_t)(delta_ton - delta_ton % speed);
       chan->ton_sliding_counter = (uint8_t)speed;
     } else if (op == 0xF8) {
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, 8);
+      ay_chip_set_ay_register_fast(chip, 13, 8);
     } else if (op == 0xFA) {
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, 10);
+      ay_chip_set_ay_register_fast(chip, 13, 10);
     } else if (op == 0xFB) {
       chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
       if ((rb(f->data, chan->address_in_pattern) & 32) == 0) {
@@ -264,9 +393,9 @@ static void pattern_interpreter(asc_file* f, asc_channel* chan) {
         chan->amplitude_delay_counter = chan->amplitude_delay;
       }
     } else if (op == 0xFC) {
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, 12);
+      ay_chip_set_ay_register_fast(chip, 13, 12);
     } else if (op == 0xFE) {
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, 14);
+      ay_chip_set_ay_register_fast(chip, 13, 14);
     }
     chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
   } while (!quit);
@@ -275,7 +404,8 @@ static void pattern_interpreter(asc_file* f, asc_channel* chan) {
 }
 
 /* Players.pas:9889-9982, GetRegisters. */
-static void get_registers(asc_file* f, asc_channel* chan, uint8_t* temp_mixer) {
+static void get_registers(asc_file* f, ay_chip* chip, asc_channel* chan,
+                           uint8_t* temp_mixer) {
   if (chan->sample_finished || !chan->sound_enabled) {
     chan->amplitude = 0;
   } else {
@@ -330,7 +460,7 @@ static void get_registers(asc_file* f, asc_channel* chan, uint8_t* temp_mixer) {
       int8_t delta = (int8_t)((uint8_t)(s0 << 3));
       int div8 = delta / 8;
       if (sample_ok_for_envelope && (*temp_mixer & 64)) {
-        f->ay.chip.reg[11] = (uint8_t)(f->ay.chip.reg[11] + div8);
+        chip->reg[11] = (uint8_t)(chip->reg[11] + div8);
       } else {
         chan->current_noise = (uint8_t)(chan->current_noise + div8);
       }
@@ -363,7 +493,7 @@ static void get_registers(asc_file* f, asc_channel* chan, uint8_t* temp_mixer) {
       chan->point_in_ornament = chan->loop_point_in_ornament;
 
     if ((*temp_mixer & 64) == 0)
-      f->ay.chip.reg[6] = (uint8_t)(
+      chip->reg[6] = (uint8_t)(
           ((uint8_t)(chan->current_ton_sliding >> 8) + chan->current_noise) &
           0x1F);
 
@@ -389,9 +519,15 @@ static void get_registers(asc_file* f, asc_channel* chan, uint8_t* temp_mixer) {
   *temp_mixer >>= 1;
 }
 
-/* Players.pas:9709-10051, ASC_Get_Registers (minus CheckLoopAndStop -
- * matches this project's other tracker-format ports' own precedent). */
-static void asc_get_registers(asc_file* f) {
+/* Players.pas:9709-10051, ASC_Get_Registers. MIG-0108: the
+ * CheckLoopAndStop-equivalent check now lives in asc_file_make_buffer's
+ * tick loop instead of here (see its own comment) - functionally
+ * equivalent since nothing else touches global_tick_counter in
+ * between. Shared by ASC/ASC1 and ASC0, same as every other function
+ * in this file. MIG-0112: `chip` is the target AY register file this
+ * frame's writes land in - see stc_file.c's stc_get_registers for the
+ * full rationale. */
+static void asc_get_registers(asc_file* f, ay_chip* chip) {
   uint8_t temp_mixer;
 
   f->delay_counter--;
@@ -416,32 +552,32 @@ static void asc_get_registers(asc_file* f) {
         f->chan_b.initial_noise = 0;
         f->chan_c.initial_noise = 0;
       }
-      pattern_interpreter(f, &f->chan_a);
+      pattern_interpreter(f, chip, &f->chan_a);
     }
     f->chan_b.note_skip_counter--;
-    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, &f->chan_b);
+    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_b);
     f->chan_c.note_skip_counter--;
-    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, &f->chan_c);
+    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_c);
     f->delay_counter = f->delay;
   }
 
   temp_mixer = 0;
-  get_registers(f, &f->chan_a, &temp_mixer);
-  get_registers(f, &f->chan_b, &temp_mixer);
-  get_registers(f, &f->chan_c, &temp_mixer);
+  get_registers(f, chip, &f->chan_a, &temp_mixer);
+  get_registers(f, chip, &f->chan_b, &temp_mixer);
+  get_registers(f, chip, &f->chan_c, &temp_mixer);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 7, temp_mixer);
+  ay_chip_set_ay_register_fast(chip, 7, temp_mixer);
 
-  f->ay.chip.reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
-  f->ay.chip.reg[1] = (uint8_t)(f->chan_a.ton >> 8);
-  f->ay.chip.reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
-  f->ay.chip.reg[3] = (uint8_t)(f->chan_b.ton >> 8);
-  f->ay.chip.reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
-  f->ay.chip.reg[5] = (uint8_t)(f->chan_c.ton >> 8);
+  chip->reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
+  chip->reg[1] = (uint8_t)(f->chan_a.ton >> 8);
+  chip->reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
+  chip->reg[3] = (uint8_t)(f->chan_b.ton >> 8);
+  chip->reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
+  chip->reg[5] = (uint8_t)(f->chan_c.ton >> 8);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+  ay_chip_set_ay_register_fast(chip, 8, f->chan_a.amplitude);
+  ay_chip_set_ay_register_fast(chip, 9, f->chan_b.amplitude);
+  ay_chip_set_ay_register_fast(chip, 10, f->chan_c.amplitude);
 
   trace_log_ay(f->global_tick_counter, "asc_a", f->chan_a.ton, f->chan_a.amplitude);
   trace_log_ay(f->global_tick_counter, "asc_b", f->chan_b.ton, f->chan_b.amplitude);
@@ -449,6 +585,30 @@ static void asc_get_registers(asc_file* f) {
   trace_log_ay(f->global_tick_counter, "asc_mixer", temp_mixer, 0);
 
   f->global_tick_counter++;
+}
+
+/* Players.pas:8732-8746, CheckLoopAndStop(CNum) + one asc_get_registers
+ * call - see stc_file.c's stc_file_step_registers for the full
+ * rationale. */
+bool asc_file_step_registers(asc_file* f, ay_chip* chip) {
+  /* Players.pas:8730-8746, CheckLoopAndStop(CNum) - Force_Loop
+   * (MIG-0114) lets register generation continue past the natural
+   * end (so a shorter Turbosound-paired voice keeps looping audibly)
+   * while still marking real_end_all true, matching `if Do_Loop or
+   * Force_Loop then ...Counter := ...Max; if not Do_Loop then begin
+   * Real_End[CNum] := True; if not Force_Loop then Exit(True); end;`
+   * exactly. */
+  if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop || f->force_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    }
+    if (!f->do_loop) {
+      f->real_end_all = true;
+      if (!f->force_loop) return false;
+    }
+  }
+  asc_get_registers(f, chip);
+  return true;
 }
 
 int asc_file_make_buffer(asc_file* f, int16_t* buf, int buffer_length) {
@@ -461,23 +621,34 @@ int asc_file_make_buffer(asc_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
-    asc_get_registers(f);
+    /* Players.pas: ASC_Get_Registers's own first statement, `if
+     * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
+     * MIG-0108/MIG-0112) - asc_file_step_registers is the shared
+     * building block player_step_registers (player.c) also uses when
+     * this format is playlist-paired as Turbosound's second voice; here
+     * it targets this file's own private chip (standalone use). Force_Loop
+     * (the original's TS-pair "continue playback of the shorter module"
+     * case) doesn't apply - TSMode isn't ported (MIG-0007), so only
+     * Do_Loop matters. */
+    if (!asc_file_step_registers(f, &f->ay.chip)) break;
     if (!ay->int_flag) {
       ay->number_of_tiks = ay_tiks_in_interrupt << 32;
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   return ay->buf_len;
 }

@@ -58,10 +58,15 @@ static bool parse_time(const char* s, int* out_seconds) {
 
 void gui_jptime_show(GtkWindow* parent, gui_playback* playback) {
   /* MainWin.pas: JumpToTime - "if not IsPlaying then exit" / "if Paused
-   * then exit" collapse here to "if nothing loaded, or this format has
-   * no known duration to jump within, do nothing" (see jmptime.h's own
-   * comment on the AY/YM/VTX-only scope). */
+   * then exit". IsPlaying maps to "the playback thread is running and
+   * hasn't hit natural end-of-song" (gui_playback_stop clears
+   * thread_started; a naturally-ended song sets finished, same as
+   * Pascal's own IsPlaying going false at end-of-track) - matching the
+   * exact two-guard order from the original rather than the previously
+   * looser "just check loaded" condition. */
   if (!playback->loaded) return;
+  if (!playback->thread_started || gui_playback_is_finished(playback)) return;
+  if (gui_playback_is_paused(playback)) return;
   double duration = gui_playback_duration_seconds(playback);
   if (duration <= 0.0) return;
 

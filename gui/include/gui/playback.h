@@ -34,7 +34,25 @@
 #include "ay_engine/player.h"
 
 typedef struct gui_playback {
-  player p;
+  /* MIG-0112: playlist-level Turbosound pairing - `pair.primary` is what
+   * every "the loaded player" reference throughout this file/mainwin.c
+   * used to mean when this was a plain `player p`; `pair.active` is
+   * true iff `has_ts_pair` (below) was set at load time AND pairing
+   * actually activated (see player_pair_load_song's own comment on when
+   * it doesn't, e.g. a self-pairing PT3 file). Every render/query call
+   * in this file now goes through player_pair_* (a plain passthrough to
+   * `pair.primary` alone when `pair.active` is false, so non-paired
+   * playback is unaffected). */
+  player_pair pair;
+  bool has_ts_pair; /* the REQUEST, from gui_playlist_entry::has_ts_pair -
+                      * kept here (distinct from pair.active, the
+                      * OUTCOME) so do_seek's backward-seek reload path
+                      * knows whether to re-request pairing too. */
+  bool is_ste; /* Mixer.pas: GBSNDH's STRB/STeRB (MIG-0121) - SNDH-only,
+                * see player.h's player_load_song comment; remembered so
+                * a backward-seek reload (playback.c's do_seek) re-opens
+                * with the same setting the file was originally loaded
+                * with. */
   bool loaded;
   int sample_rate;
   char title[256]; /* filename, always set - falls back to this when
@@ -55,6 +73,14 @@ typedef struct gui_playback {
                      * in place" call, only load-from-scratch */
   int song_index;
   int song_count; /* player_song_count() as of the last successful load */
+  int channels; /* MainWin.pas: NumberOfChannels, 1 or 2 - set at load
+                 * time only (see gui_playback_load_song's `channels`
+                 * parameter and player_set_number_of_channels's own
+                 * comment on why this port, like the original, never
+                 * hot-reconfigures it mid-playback) */
+  int bits_per_sample; /* Mixer.pas: SampleBit, 8 or 16 (MIG-0130) - same
+                         * load-time-only convention as `channels` above,
+                         * see player_set_sample_bits's own comment. */
 
   void* alsa_out; /* alsa_output*, opaque here to avoid pulling ALSA
                     * headers into every gui/ translation unit that
@@ -69,10 +95,11 @@ typedef struct gui_playback {
   atomic_int_least64_t frames_played;
   double volume; /* 0.0-1.0, see file comment on its threading model */
 
-  /* Seeking (Players.pas: RerollMusic, MIG-0079/MIG-0100/MIG-0101) -
-   * only meaningful for formats player_get_tick_position() supports
-   * (AY/YM/VTX/SNDH/PT3 - see its own comment for exactly why only
-   * these five so far). `seek_target_tick`
+  /* Seeking (Players.pas: RerollMusic, MIG-0079/MIG-0100/MIG-0101/
+   * MIG-0103/MIG-0104) - only meaningful for formats
+   * player_get_tick_position() supports (AY/YM/VTX/SNDH/PT3 plus
+   * PT1/PT2/GTR/FLS/STC/STP/FXM/PSM/ASC/ASC0/FTC/PSC/SQT - see its own
+   * comment for the full trace). `seek_target_tick`
    * is set by the GTK thread before `seek_requested`; the playback
    * thread picks it up at the top of its loop (so a seek works whether
    * or not playback is currently paused) and performs the actual
@@ -94,9 +121,58 @@ bool gui_playback_load(gui_playback* pb, const char* path, int sample_rate);
  * must be < player_song_count() for the loaded format - see player.h's
  * player_load_song). Ignored by every format except multi-song .ay
  * files, same as the underlying player_load_song. Added for ButNext/
- * ButPrev (MainWin.pas: ButNextClick/ButPrevClick). */
+ * ButPrev (MainWin.pas: ButNextClick/ButPrevClick).
+ *
+ * `channels` (1 or 2 - anything else is treated as 2/stereo, matching
+ * MainWin.pas:1795's `St in [1,2]` guard on Set_Stereo, which this
+ * loads through to via player_set_number_of_channels) selects the
+ * output channel count for the freshly-loaded file: opens the ALSA
+ * device with that channel count AND configures the engine to emit
+ * MONO16 or STEREO16 frames accordingly (see player_make_buffer's own
+ * comment on the two frame shapes) - load-time only, matching the
+ * original's own not-while-playing restriction (Set_Stereo:
+ * `if IsPlaying then exit`), which is naturally satisfied here since
+ * this is only ever called before gui_playback_play.
+ *
+ * `ts_pair` (MIG-0112) requests playlist-level Turbosound pairing,
+ * mirroring gui_playlist_entry::has_ts_pair - since this port's own
+ * .ayl support only ever produces "pair `path` with itself" (see that
+ * field's own comment for the full trace against PlayList.pas's
+ * LoadPLItem/SavePLItem), this just re-loads the SAME path as the
+ * pair's secondary voice; pass false for ordinary, unpaired playback.
+ * Pairing may still end up inactive even when requested (e.g. `path` is
+ * a self-pairing PT3 file) - check gui_playback_is_ts_paired(pb) after
+ * a successful load if the caller needs to know for sure.
+ *
+ * `is_ste` (MIG-0121): Mixer.pas's GBSNDH STRB/STeRB radio pair -
+ * SNDH-only (no-op for every other format, passed straight through to
+ * player_pair_load_song/player_load_song); pass true unless the caller
+ * has a specific reason to force plain-ST (no DMA-sound hardware)
+ * behavior.
+ *
+ * `device`/`bits_per_sample`/`buf_len_ms`/`num_buffers` (MIG-0130):
+ * Mixer.pas's own GBDevice/GBBRate/GBBuffs - ALSA output-device
+ * configuration, passed straight through to alsa_output_open (see its
+ * own doc comment for the exact digsound_open correspondence).
+ * `device` NULL/"" opens ALSA's own "default". `bits_per_sample` (8 or
+ * 16) is ALSO applied to the loaded player via player_set_sample_bits
+ * (real 8-bit-WIDTH PCM, not just a smaller amplitude scale - see that
+ * function's own doc comment) - unlike `channels`, which only affects
+ * the engine's own synthesizer selection, this one setting has to stay
+ * consistent on BOTH sides (engine output shape AND the ALSA device's
+ * own configured sample format) or the two would produce mismatched
+ * byte widths. */
 bool gui_playback_load_song(gui_playback* pb, const char* path,
-                             int sample_rate, int song_index);
+                             int sample_rate, int song_index, int channels,
+                             bool ts_pair, bool is_ste, const char* device,
+                             int bits_per_sample, int buf_len_ms,
+                             int num_buffers);
+
+/* True iff the currently-loaded file is genuinely playing as a
+ * Turbosound pair (player_pair::active) - false for ordinary playback
+ * OR a requested-but-refused pairing (see gui_playback_load_song's own
+ * `ts_pair` comment). */
+bool gui_playback_is_ts_paired(const gui_playback* pb);
 
 /* Starts the background decode/output thread if not already running;
  * clears the pause flag either way. */
@@ -115,9 +191,9 @@ double gui_playback_position_seconds(const gui_playback* pb);
 
 /* True (with `*fraction` in [0,1]) if the loaded format has a known
  * fixed duration to compute real playback progress from
- * (player_get_tick_position() - AY/YM/VTX/SNDH/PT3 so far, see its own
- * comment). False otherwise - the caller should fall back to a
- * cosmetic sweep (see gui/src/mainwin.c's on_timer, unchanged for
+ * (player_get_tick_position() - see its own comment for the full list
+ * of formats covered). False otherwise - the caller should fall back
+ * to a cosmetic sweep (see gui/src/mainwin.c's on_timer, unchanged for
  * every other format). */
 bool gui_playback_get_progress_fraction(const gui_playback* pb,
                                          double* fraction);
@@ -132,8 +208,8 @@ bool gui_playback_get_progress_fraction(const gui_playback* pb,
  * faster than realtime. */
 void gui_playback_request_seek(gui_playback* pb, double fraction);
 
-/* Total song duration in real seconds, or 0.0 if unknown (same AY/YM/
- * VTX-only scope as gui_playback_get_progress_fraction - uses
+/* Total song duration in real seconds, or 0.0 if unknown (same all-18-
+ * formats scope as gui_playback_get_progress_fraction - uses
  * player_get_seconds_per_tick() on top of the tick_max that function
  * already reads). Added for JmpTime.pas's "Track length:" label. */
 double gui_playback_duration_seconds(const gui_playback* pb);

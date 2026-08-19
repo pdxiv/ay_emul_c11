@@ -7,3 +7,6 @@
 [submodule "engine/third_party/musashi"]
 	path = engine/third_party/musashi
 	url = https://github.com/kstenerud/Musashi.git
+[submodule "engine/third_party/lhassa"]
+	path = engine/third_party/lhassa
+	url = https://github.com/amigazen/Lhassa.git

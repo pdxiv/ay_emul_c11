@@ -49,6 +49,102 @@ static void copy_fixed_field(const uint8_t* src, size_t src_size,
   if (start > 0) memmove(out, out + start, n - start + 1);
 }
 
+/* Players.pas:14950-15001, GetTimeGTR - walks the position list opcode-
+ * only (no audio synthesis), summing GTR_Delay once per processed
+ * pattern step to compute the song's total duration/loop-point tick, in
+ * the same style as pt3_file.c's pt3_get_time (MIG-0101). GTR_ID[3] ==
+ * 0x10 selects the variant where opcode 0xE0 does NOT end the walk -
+ * matching pattern_interpreter's own `if (f->id[3] != 0x10)` checks
+ * below. Unlike Pascal's oversized Index[0..65536] array (65537 bytes),
+ * this port's data buffer is exactly 65536 bytes (indices 0..65535), so
+ * every array read below is bounds-checked first and bails to tm=0/
+ * lp=0 on violation (this port's own safety convention - Pascal's
+ * GetTimeGTR itself has no RaiseBadFileStructure calls at all, trusting
+ * its oversized buffer to tolerate any offset a well-formed file
+ * produces). GTR_PatternsPointers has only 32 slots (Players.pas:187);
+ * a position/group byte that would index past that is likewise treated
+ * as a bounds violation here, since Pascal's own static-array overrun
+ * in that case is undefined behavior this port must not reproduce. An
+ * added iteration cap (1<<20) guards against a pathologically long walk
+ * that could otherwise hang a fuzzer - Pascal's own `repeat...until
+ * False` loops here have no such cap, but every read within them IS
+ * bounds-checked here, so a malformed file can only spin, never read
+ * out of bounds. */
+static void gtr_get_time(const gtr_file* f, int64_t* out_tm,
+                          int64_t* out_lp) {
+  const uint8_t* d = f->data;
+  int64_t tm = 0, lp = 0;
+  int a = 0;
+  int a1 = 0;
+  bool flg = false;
+  uint32_t j1;
+  long iterations = 0;
+
+  if (f->number_of_positions == 0) goto fail;
+
+  {
+    int pos0 = d[f->positions_offset];
+    int grp0 = pos0 / 6;
+    if (grp0 >= 32) goto fail;
+    j1 = f->patterns_pointers[grp0].a;
+  }
+
+  for (;;) {
+    if (++iterations > (1 << 20)) goto fail;
+    a1--;
+    if (a1 < 0) {
+      a1 = 0;
+      for (;;) {
+        if (j1 >= 65536) goto fail;
+        if (d[j1] != 255) break;
+        a++;
+        flg = (a >= f->number_of_positions);
+        if (flg) break;
+        if (a == f->loop_position) lp = tm;
+        {
+          int pos = d[f->positions_offset + (uint32_t)a];
+          int grp = pos / 6;
+          if (grp >= 32) goto fail;
+          j1 = f->patterns_pointers[grp].a;
+        }
+      }
+      if (flg) break;
+      for (;;) {
+        if (j1 >= 65536) goto fail;
+        uint8_t op = d[j1];
+        bool brk = false;
+        if (op <= 0x5F || (op >= 0xD0 && op <= 0xDF)) {
+          j1++;
+          brk = true;
+        } else if (op >= 0x80 && op <= 0xBF) {
+          a1 = op - 0x80;
+        } else if (op >= 0xC0 && op <= 0xCF) {
+          j1++;
+        } else if (op == 0xE0) {
+          if (f->id[3] != 0x10) {
+            j1++;
+            brk = true;
+          }
+        }
+        if (brk) break; /* Pascal's own break here skips the shared
+                          * trailing Incr(j1) entirely, since break
+                          * exits the repeat loop before reaching it -
+                          * only fall through to the shared increment
+                          * below when NOT breaking. */
+        j1++;
+        if (++iterations > (1 << 20)) goto fail;
+      }
+    }
+    tm += f->delay;
+  }
+  *out_tm = tm;
+  *out_lp = lp;
+  return;
+fail:
+  *out_tm = 0;
+  *out_lp = 0;
+}
+
 /* ModTypes variant 12 (Players.pas:179-190): GTR_Delay@0 GTR_ID[0..3]@1
  * GTR_Address@5 (word) GTR_Name[0..31]@7 GTR_SamplesPointers[0..14]@39
  * (30B) GTR_OrnamentsPointers[0..15]@69 (32B)
@@ -135,11 +231,15 @@ gtr_file_status gtr_file_load(gtr_file* f, const uint8_t* data, size_t size,
 
   f->global_tick_counter = 0;
 
+  f->do_loop = false;
+  f->real_end_all = false;
+  gtr_get_time(f, &f->global_tick_max, &f->loop_tick); /* MIG-0101 */
+
   return GTR_FILE_OK;
 }
 
 /* Players.pas:11527-11593, PatternInterpreter. */
-static void pattern_interpreter(gtr_file* f, gtr_channel* chan) {
+static void pattern_interpreter(gtr_file* f, ay_chip* chip, gtr_channel* chan) {
   bool quit = false;
   chan->note_skip_counter = 0;
 
@@ -171,9 +271,9 @@ static void pattern_interpreter(gtr_file* f, gtr_channel* chan) {
       /* Players.pas:11568-11571: only a single envelope byte (reg 11) is
        * written - unlike PT1's word-sized envelope read - GTR never
        * touches envelope hi (reg 12) at all. */
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, (uint8_t)(op - 0xC0));
+      ay_chip_set_ay_register_fast(chip, 13, (uint8_t)(op - 0xC0));
       chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
-      f->ay.chip.reg[11] = rb(f->data, chan->address_in_pattern);
+      chip->reg[11] = rb(f->data, chan->address_in_pattern);
       chan->envelope_enabled = true;
     } else if (op <= 0xDF) {
       quit = true;
@@ -188,7 +288,8 @@ static void pattern_interpreter(gtr_file* f, gtr_channel* chan) {
 }
 
 /* Players.pas:11595-11634, GetRegisters. */
-static void get_registers(gtr_file* f, gtr_channel* chan, uint8_t* temp_mixer) {
+static void get_registers(gtr_file* f, ay_chip* chip, gtr_channel* chan,
+                           uint8_t* temp_mixer) {
   if (chan->enabled) {
     uint8_t j = (uint8_t)(chan->note +
                            rb(f->data, chan->ornament_pointer +
@@ -206,7 +307,7 @@ static void get_registers(gtr_file* f, gtr_channel* chan, uint8_t* temp_mixer) {
 
     uint8_t b = rb(f->data, (uint32_t)chan->sample_pointer +
                                  chan->position_in_sample + 1);
-    f->ay.chip.reg[6] = (uint8_t)((f->ay.chip.reg[6] | b) & 0x1F);
+    chip->reg[6] = (uint8_t)((chip->reg[6] | b) & 0x1F);
 
     uint8_t amp = (uint8_t)(rb(f->data, (uint32_t)chan->sample_pointer +
                                              chan->position_in_sample) -
@@ -245,9 +346,15 @@ static void gtr_pattern_advance(gtr_file* f) {
   }
 }
 
-/* Players.pas:11523-11698, GTR_Get_Registers (minus CheckLoopAndStop -
- * matches pt3_get_registers/pt1_get_registers's own precedent). */
-static void gtr_get_registers(gtr_file* f) {
+/* Players.pas:11523-11698, GTR_Get_Registers. MIG-0108: the
+ * CheckLoopAndStop-equivalent check now lives in gtr_file_make_buffer's
+ * tick loop instead of here (see its own comment) - functionally
+ * equivalent since nothing else touches global_tick_counter in
+ * between. MIG-0112: `chip` is the target AY register file this frame's
+ * writes land in - `&f->ay.chip` for standalone/self playback, or an
+ * EXTERNAL chip when this format is playlist-paired as Turbosound's
+ * second voice (see stc_file.c's own comment on this same shape). */
+static void gtr_get_registers(gtr_file* f, ay_chip* chip) {
   uint8_t temp_mixer;
 
   f->delay_counter--;
@@ -257,34 +364,60 @@ static void gtr_get_registers(gtr_file* f) {
     f->chan_a.note_skip_counter--;
     if (f->chan_a.note_skip_counter < 0) {
       gtr_pattern_advance(f);
-      pattern_interpreter(f, &f->chan_a);
+      pattern_interpreter(f, chip, &f->chan_a);
     }
     f->chan_b.note_skip_counter--;
-    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, &f->chan_b);
+    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_b);
     f->chan_c.note_skip_counter--;
-    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, &f->chan_c);
+    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_c);
   }
 
   temp_mixer = 0;
-  f->ay.chip.reg[6] = 0;
-  get_registers(f, &f->chan_a, &temp_mixer);
-  get_registers(f, &f->chan_b, &temp_mixer);
-  get_registers(f, &f->chan_c, &temp_mixer);
+  chip->reg[6] = 0;
+  get_registers(f, chip, &f->chan_a, &temp_mixer);
+  get_registers(f, chip, &f->chan_b, &temp_mixer);
+  get_registers(f, chip, &f->chan_c, &temp_mixer);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 7, temp_mixer);
+  ay_chip_set_ay_register_fast(chip, 7, temp_mixer);
 
-  f->ay.chip.reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
-  f->ay.chip.reg[1] = (uint8_t)(f->chan_a.ton >> 8);
-  f->ay.chip.reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
-  f->ay.chip.reg[3] = (uint8_t)(f->chan_b.ton >> 8);
-  f->ay.chip.reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
-  f->ay.chip.reg[5] = (uint8_t)(f->chan_c.ton >> 8);
+  chip->reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
+  chip->reg[1] = (uint8_t)(f->chan_a.ton >> 8);
+  chip->reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
+  chip->reg[3] = (uint8_t)(f->chan_b.ton >> 8);
+  chip->reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
+  chip->reg[5] = (uint8_t)(f->chan_c.ton >> 8);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+  ay_chip_set_ay_register_fast(chip, 8, f->chan_a.amplitude);
+  ay_chip_set_ay_register_fast(chip, 9, f->chan_b.amplitude);
+  ay_chip_set_ay_register_fast(chip, 10, f->chan_c.amplitude);
 
   f->global_tick_counter++;
+}
+
+/* Players.pas:8732-8746, CheckLoopAndStop(CNum) + one gtr_get_registers
+ * call - the reusable "advance one interrupt frame's worth of registers
+ * into `chip`" building block MIG-0112's playlist-pairing driver needs
+ * (player_step_registers, player.c). Returns false once this format's own
+ * natural end is reached (mirrors Real_End[CNum] going true). */
+bool gtr_file_step_registers(gtr_file* f, ay_chip* chip) {
+  /* Players.pas:8730-8746, CheckLoopAndStop(CNum) - Force_Loop
+   * (MIG-0114) lets register generation continue past the natural
+   * end (so a shorter Turbosound-paired voice keeps looping audibly)
+   * while still marking real_end_all true, matching `if Do_Loop or
+   * Force_Loop then ...Counter := ...Max; if not Do_Loop then begin
+   * Real_End[CNum] := True; if not Force_Loop then Exit(True); end;`
+   * exactly. */
+  if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop || f->force_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    }
+    if (!f->do_loop) {
+      f->real_end_all = true;
+      if (!f->force_loop) return false;
+    }
+  }
+  gtr_get_registers(f, chip);
+  return true;
 }
 
 int gtr_file_make_buffer(gtr_file* f, int16_t* buf, int buffer_length) {
@@ -297,23 +430,31 @@ int gtr_file_make_buffer(gtr_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
-    gtr_get_registers(f);
+    /* Players.pas: GTR_Get_Registers's own first statement, `if
+     * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
+     * MIG-0108/MIG-0112) - gtr_file_step_registers is the shared building
+     * block player_step_registers (player.c) also uses when this format
+     * is playlist-paired as Turbosound's second voice; here it targets
+     * this file's own private chip (standalone use). */
+    if (!gtr_file_step_registers(f, &f->ay.chip)) break;
     if (!ay->int_flag) {
       ay->number_of_tiks = ay_tiks_in_interrupt << 32;
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   return ay->buf_len;
 }

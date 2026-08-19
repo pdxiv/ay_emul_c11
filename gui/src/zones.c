@@ -10,6 +10,16 @@ static void draw_pixbuf_region(cairo_t* cr, GdkPixbuf* skin, int src_x,
   cairo_save(cr);
   cairo_translate(cr, dest_x - src_x, dest_y - src_y);
   gdk_cairo_set_source_pixbuf(cr, skin, 0, 0);
+  /* Pixel-perfect sprite blit: default antialiasing/filtering softens the
+   * rectangle's edge against whatever is already drawn underneath (the
+   * base skin, painted first) and the pattern's own sampling - invisible
+   * when a button's "normal" sprite is drawn over identical base-skin
+   * content, but a visible seam/outline when a genuinely different
+   * sprite (e.g. a button's "pushed" state) is composited over the
+   * unchanged base skin beneath it. Hard-edged nearest-pixel sampling
+   * matches the original's own CopyRect blit exactly, at any scale. */
+  cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+  cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
   cairo_rectangle(cr, src_x, src_y, w, h);
   cairo_fill(cr);
   cairo_restore(cr);
@@ -79,6 +89,11 @@ static void draw_pixbuf_region_keyed(cairo_t* cr, GdkPixbuf* skin,
   cairo_surface_mark_dirty(surf);
   cairo_save(cr);
   cairo_set_source_surface(cr, surf, dest_x, dest_y);
+  /* Same hard-edge/nearest-pixel rationale as draw_pixbuf_region above -
+   * avoids the color-keyed handle's own edge softening against whatever
+   * is underneath at scale > 1. */
+  cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+  cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
   cairo_paint(cr);
   cairo_restore(cr);
   cairo_surface_destroy(surf);

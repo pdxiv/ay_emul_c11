@@ -15,6 +15,7 @@ pass=0
 fail=0
 skip=0
 known=0
+known_ts=0
 
 run_one() {
   fname="$1"
@@ -117,29 +118,95 @@ run_one_known_sndh() {
   fi
 }
 
+# TSMODE-KNOWN (MIG-0109): wav_export_pt3's own harness scenario
+# (RunPT3WAVExportTest, OracleHarness.pas:3099+) hardcodes `TSMode :=
+# False;` unconditionally and never re-derives it from the file's own TS
+# byte - it was written before this port's TSMode support existed and
+# deliberately exercises only the single-chip PT3 path (matching this
+# port's own pre-existing single-voice pt3_file_load/make_buffer
+# contract, MIG-0101). It is NOT a valid oracle for a real TS-tagged
+# file's dual-chip output. Two real TS-tagged files exist in the corpus
+# (Alone_Coder_-_PARAM_TS.pt3, Shiru_-_kirby_bq_ver.pt3, both version 7
+# with a non-space byte at file offset 98 - see pt3_file.h's own ts_byte
+# comment) - now that this port's own pt3_file_load auto-detects the tag
+# and renders real dual-chip audio (matching the ORIGINAL's own
+# TrModLoaded auto-detection, which likewise needs no caller opt-in),
+# ay_player's output for these two files is EXPECTED to differ from this
+# particular single-chip-only oracle scenario - that divergence is the
+# CORRECT new behavior, not a regression. Real oracle coverage for the
+# dual-chip case itself comes from the separate ts_pair_pt3 scenario
+# added alongside this (see run_diff.sh), which drives a real
+# TrModLoaded-equivalent load path with TSMode genuinely active.
+run_one_known_ts_pt3() {
+  fname="$1"
+  frames="$2"
+  oracle_wav="$WORKDIR/oracle.wav"
+  player_wav="$WORKDIR/player.wav"
+  rm -f "$oracle_wav" "$player_wav"
+
+  AY_EMUL_ORACLE=wav_export_pt3 AY_EMUL_ORACLE_FILE="$CORPUS/$fname" \
+    AY_EMUL_ORACLE_OUT="$oracle_wav" "$ORACLE_BIN" >"$WORKDIR/oracle.log" 2>&1
+  if [ ! -s "$oracle_wav" ]; then
+    echo "[FAIL] $fname (wav_export_pt3): Pascal side produced no output"
+    fail=$((fail+1))
+    status=1
+    return
+  fi
+
+  timeout 60 "$PLAYER_BIN" "$CORPUS/$fname" --wav="$player_wav" --frames="$frames" \
+    --ignore-end >"$WORKDIR/player.log" 2>&1
+  player_rc=$?
+  if [ "$player_rc" = 124 ]; then
+    echo "[FAIL] $fname (wav_export_pt3): ay_player TIMED OUT (60s)"
+    fail=$((fail+1))
+    status=1
+    return
+  fi
+  if [ ! -s "$player_wav" ]; then
+    echo "[FAIL] $fname (wav_export_pt3): ay_player produced no output (exit=$player_rc)"
+    fail=$((fail+1))
+    status=1
+    return
+  fi
+
+  oracle_md5=$(md5sum "$oracle_wav" | cut -d' ' -f1)
+  player_md5=$(md5sum "$player_wav" | cut -d' ' -f1)
+  if [ "$oracle_md5" = "$player_md5" ]; then
+    echo "[FAIL] $fname (wav_export_pt3): expected TSMode divergence from this single-chip-only oracle scenario, but got byte-identical output - ts_mode may not actually be active, investigate"
+    fail=$((fail+1))
+    status=1
+  else
+    echo "[KNOWN] $fname (wav_export_pt3): not byte-identical (MIG-0109, expected - see ts_pair_pt3 for real TSMode oracle coverage) - oracle md5=$oracle_md5 player md5=$player_md5"
+    known_ts=$((known_ts+1))
+  fi
+}
+
 cd "$CORPUS" || exit 1
 for f in *; do
   case "$f" in
     README.md)
       continue
       ;;
+    Alone_Coder_-_PARAM_TS.pt3|Shiru_-_kirby_bq_ver.pt3)
+      run_one_known_ts_pt3 "$f" 204800
+      ;;
     *.pt3) run_one "$f" wav_export_pt3 204800 --ignore-end ;;
     *.ym) run_one "$f" wav_export_ym 204800 ;;
     *.vtx|*.VTX) run_one "$f" wav_export 204800 ;;
     *.ay) run_one "$f" wav_export_ay 512 ;;
-    *.pt1) run_one "$f" wav_export_pt1 441344 ;;
-    *.gtr) run_one "$f" wav_export_gtr 441344 ;;
-    *.fls) run_one "$f" wav_export_fls 441344 ;;
-    *.stc) run_one "$f" wav_export_stc 441344 ;;
-    *.stp) run_one "$f" wav_export_stp 441344 ;;
-    *.pt2) run_one "$f" wav_export_pt2 441344 ;;
-    *.fxm) run_one "$f" wav_export_fxm 441344 ;;
-    *.psm) run_one "$f" wav_export_psm 441344 ;;
-    *.asc) run_one "$f" wav_export_asc 441344 ;;
-    *.as0) run_one "$f" wav_export_asc0 441344 ;;
-    *.ftc) run_one "$f" wav_export_ftc 441344 ;;
-    *.psc) run_one "$f" wav_export_psc 441344 ;;
-    *.sqt) run_one "$f" wav_export_sqt 441344 ;;
+    *.pt1) run_one "$f" wav_export_pt1 441344 --ignore-end ;;
+    *.gtr) run_one "$f" wav_export_gtr 441344 --ignore-end ;;
+    *.fls) run_one "$f" wav_export_fls 441344 --ignore-end ;;
+    *.stc) run_one "$f" wav_export_stc 441344 --ignore-end ;;
+    *.stp) run_one "$f" wav_export_stp 441344 --ignore-end ;;
+    *.pt2) run_one "$f" wav_export_pt2 441344 --ignore-end ;;
+    *.fxm) run_one "$f" wav_export_fxm 441344 --ignore-end ;;
+    *.psm) run_one "$f" wav_export_psm 441344 --ignore-end ;;
+    *.asc) run_one "$f" wav_export_asc 441344 --ignore-end ;;
+    *.as0) run_one "$f" wav_export_asc0 441344 --ignore-end ;;
+    *.ftc) run_one "$f" wav_export_ftc 441344 --ignore-end ;;
+    *.psc) run_one "$f" wav_export_psc 441344 --ignore-end ;;
+    *.sqt) run_one "$f" wav_export_sqt 441344 --ignore-end ;;
     *.sndh) run_one_known_sndh "$f" 1440256 ;;
     *)
       echo "[SKIP] $f: unrecognized extension"
@@ -149,5 +216,5 @@ for f in *; do
 done
 
 echo ""
-echo "==== Summary: $pass passed, $fail failed, $known known-non-identical (MIG-0056, informational), $skip skipped ===="
+echo "==== Summary: $pass passed, $fail failed, $known known-non-identical (MIG-0056, informational), $known_ts known-non-identical (MIG-0109 TSMode, informational), $skip skipped ===="
 exit $status

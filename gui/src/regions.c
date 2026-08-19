@@ -12,19 +12,26 @@
  *
  * Also ports rgn2.inc (nrects2=299, About.pas's own separate 343x346
  * window shape - see gui_apply_about_window_shape below and gui/
- * dialogs/about.c, MIG-0090).
+ * dialogs/about.c, MIG-0090) - always applied at 1x (About.pas itself
+ * never references Scale, confirmed by direct search - only the main
+ * window scales, matching Tools.pas's own CBDoubleSz).
  *
- * NOT ported yet (deferred, not silently dropped - see migration_debt.
- * yaml):
- *  - The "Scale" DPI-scaling multiplier every span is multiplied by in
- *    the original ("x * Scale" etc.) - this port always applies the
- *    table at Scale=1 (matching the common, non-hi-DPI case); a future
- *    milestone can add a scale parameter to gui_apply_main_window_shape
- *    without changing this table.
+ * The "Scale" 1x/2x window-size multiplier (Tools.pas: CBDoubleSz) IS
+ * now ported (MIG-0119) - gui_apply_main_window_shape takes a `scale`
+ * argument and multiplies every span by it, matching MainWin.pas:3288-
+ * 3298's own `x * Scale` etc. exactly. See gui/src/mainwin.c's own
+ * gui_mainwin_set_scale for the full picture (window/drawing-area
+ * resize, cairo_scale for drawing, and dividing incoming mouse
+ * coordinates by scale for hit-testing - the skin bitmap itself is
+ * never pre-scaled, matching the original's own CopyRect-stretches-
+ * the-same-1x-bitmap approach).
+ *
+ * NOT ported (a separate mechanism, not this file's concern):
  *  - Per-button hit-test regions (RgnPlay/RgnStop/RgnMixer/etc.) are a
  *    SEPARATE mechanism (runtime-computed rounded-rect/polygon regions,
  *    MainWin.pas:3211-3286, not from this static table at all) - see
- *    gui/src/zones.c for those.
+ *    gui/src/zones.c for those (scaled by dividing mouse coordinates,
+ *    not by scaling the zone rects themselves - see mainwin.c).
  */
 #include "gui/regions.h"
 
@@ -160,11 +167,16 @@ static const rgn_span RGN_SPANS[] = {
 
 #define RGN_SPAN_COUNT (sizeof(RGN_SPANS) / sizeof(RGN_SPANS[0]))
 
-void gui_apply_main_window_shape(GdkWindow* window) {
+void gui_apply_main_window_shape(GdkWindow* window, int scale) {
   GdkRegion* region = gdk_region_new();
   for (unsigned i = 0; i < RGN_SPAN_COUNT; i++) {
-    GdkRectangle rect = {RGN_SPANS[i].x, RGN_SPANS[i].y, RGN_SPANS[i].w,
-                          RGN_SPANS[i].h};
+    /* MainWin.pas:3288-3298's own `x * Scale, y * Scale, ...` - every
+     * span scaled uniformly (MIG-0119), matching the original exactly
+     * (the skin bitmap itself is never pre-scaled; only the geometry
+     * used to draw/mask/hit-test it is - see gui/src/mainwin.c's own
+     * on_expose cairo_scale comment). */
+    GdkRectangle rect = {RGN_SPANS[i].x * scale, RGN_SPANS[i].y * scale,
+                          RGN_SPANS[i].w * scale, RGN_SPANS[i].h * scale};
     gdk_region_union_with_rect(region, &rect);
   }
   gdk_window_shape_combine_region(window, region, 0, 0);

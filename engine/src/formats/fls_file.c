@@ -41,6 +41,103 @@ static uint16_t fls_pattern_ptr(const uint8_t* d, int n, int which) {
   return rd16(d, off);
 }
 
+/* Players.pas:16772-16817, GetTimeFLS's per-channel opcode-scan step
+ * (walks the SAME single pattern stream, FLS_PatternsPointers[n].PatternA,
+ * that InitTrackerModule/FLS_Get_Registers's own channel-A advance uses -
+ * FLS's note-skip/tempo, like STP's, is a single shared value, not
+ * per-channel). Returns FLS_TIME_END_OF_ROW when Index[j1] = 255 (no more
+ * pattern data for this position - move to the next position), matching
+ * the original's own `if Index[j1] = 255 then break;` (which exits the
+ * enclosing per-row `repeat...until False`). The original has no
+ * iteration cap on this inner case-scan (unlike GetTimePT3/GetTimeASC's
+ * own DLCatcher) - `budget` is this port's own added hostile-input safety
+ * net, not in the original. */
+typedef enum {
+  FLS_TIME_CONTINUE,
+  FLS_TIME_END_OF_ROW,
+  FLS_TIME_ERROR,
+} fls_time_result;
+
+static fls_time_result fls_time_channel_step(const uint8_t* d, uint32_t* j,
+                                              int* a, int8_t* a1x) {
+  int64_t budget = 1 << 20; /* MIG safety cap - not in the original */
+
+  (*a)--;
+  if (*a >= 0) return FLS_TIME_CONTINUE;
+  if (rb(d, *j) == 255) return FLS_TIME_END_OF_ROW;
+
+  for (;;) {
+    if (--budget < 0) return FLS_TIME_ERROR;
+    uint8_t op = rb(d, *j);
+    if (op <= 0x5f || op == 0x80 || op == 0x81) {
+      *j = (*j + 1) & 0xFFFF;
+      *a = *a1x;
+      return FLS_TIME_CONTINUE;
+    } else if (op >= 0x82 && op <= 0x8e) {
+      *j = (*j + 1) & 0xFFFF;
+    } else if (op >= 0x8f) { /* 0x8f..0xff */
+      *a1x = (int8_t)(op - 0xa1);
+    }
+    *j = (*j + 1) & 0xFFFF;
+  }
+}
+
+/* Players.pas:16772-16817, GetTimeFLS - computes the song's total duration
+ * (Tm only, no loop point - see fls_file.h) by walking the position list
+ * exactly once (no audio synthesis). `pptr >= 65536` is the original's
+ * own explicit RaiseBadFileStructure bounds check on the positions-table
+ * read, replicated here (note this port's data[] buffer is 65536 bytes,
+ * ONE SMALLER than Pascal's 65537-byte Index array, so treating exactly
+ * 65536 as invalid too - rather than relying on it being tolerated - is
+ * required for memory safety, not just fidelity). The outer positions
+ * loop is naturally bounded to at most 65536 iterations by that same
+ * check (pptr grows strictly monotonically with i), so no extra position-
+ * count cap is needed; the inner per-row tm-accumulation loop gets its
+ * own added `row_budget` safety net (not in the original) since nothing
+ * else bounds it. On a malformed file (either safety net tripping),
+ * returns 0 rather than raising - fls_file_load has already succeeded by
+ * the time this runs, so a duration-precompute failure degrades to "no
+ * known duration" rather than failing the whole load. */
+static void fls_get_time(const fls_file* f, int64_t* out_tm) {
+  const uint8_t* d = f->data;
+  int64_t tm = 0;
+  uint8_t b = f->delay;
+  int a1 = 0;
+  int8_t a11 = 0;
+  int64_t row_budget = 1 << 20; /* MIG safety cap - not in the original */
+  int i;
+
+  for (i = 0;; i++) {
+    uint32_t pptr = (uint32_t)i + f->positions_pointer + 1;
+    uint8_t patnum;
+    uint32_t j1;
+
+    if (pptr >= 65536u) {
+      *out_tm = 0;
+      return;
+    }
+    patnum = d[pptr];
+    if (patnum == 0) break;
+
+    j1 = fls_pattern_ptr(f->data, patnum, 0);
+
+    for (;;) {
+      fls_time_result r = fls_time_channel_step(d, &j1, &a1, &a11);
+      if (r == FLS_TIME_ERROR) {
+        *out_tm = 0;
+        return;
+      }
+      if (r == FLS_TIME_END_OF_ROW) break;
+      tm += b;
+      if (--row_budget < 0) {
+        *out_tm = 0;
+        return;
+      }
+    }
+  }
+  *out_tm = tm;
+}
+
 /* ModTypes variant 10 (Players.pas:171-176): FLS_PositionsPointer@0
  * FLS_OrnamentsPointer@2 FLS_SamplesPointer@4 FLS_PatternsPointers[1..]@6
  * (3 words/6B per entry, no explicit count - open-ended). Unlike GTR,
@@ -150,12 +247,16 @@ fls_file_status fls_file_load(fls_file* f, const uint8_t* data, size_t size,
   f->chan_c.sample_tik_counter = -1;
 
   f->global_tick_counter = 0;
+  f->global_tick_max = 0;
+  f->do_loop = false;
+  f->real_end_all = false;
+  fls_get_time(f, &f->global_tick_max); /* MIG-0101-style */
 
   return FLS_FILE_OK;
 }
 
 /* Players.pas:11341-11404, PatternInterpreter. */
-static void pattern_interpreter(fls_file* f, fls_channel* chan) {
+static void pattern_interpreter(fls_file* f, ay_chip* chip, fls_channel* chan) {
   bool quit = false;
 
   do {
@@ -184,11 +285,11 @@ static void pattern_interpreter(fls_file* f, fls_channel* chan) {
     } else if (op == 0x81) {
       quit = true;
     } else if (op <= 0x8E) {
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, (uint8_t)(op - 0x80));
+      ay_chip_set_ay_register_fast(chip, 13, (uint8_t)(op - 0x80));
       chan->envelope_enabled = true;
       chan->ornament_enabled = false;
       chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
-      f->ay.chip.reg[11] = rb(f->data, chan->address_in_pattern);
+      chip->reg[11] = rb(f->data, chan->address_in_pattern);
     } else {
       chan->number_of_notes_to_skip = (uint8_t)(op - 0xA1);
     }
@@ -198,7 +299,8 @@ static void pattern_interpreter(fls_file* f, fls_channel* chan) {
 }
 
 /* Players.pas:11406-11455, GetRegisters. */
-static void get_registers(fls_file* f, fls_channel* chan, uint8_t* temp_mixer) {
+static void get_registers(fls_file* f, ay_chip* chip, fls_channel* chan,
+                           uint8_t* temp_mixer) {
   if (chan->sample_tik_counter >= 0) {
     chan->sample_tik_counter--;
     if (chan->sample_tik_counter == 0) {
@@ -221,7 +323,7 @@ static void get_registers(fls_file* f, fls_channel* chan, uint8_t* temp_mixer) {
     if ((int8_t)b1 < 0) {
       *temp_mixer |= 64;
     } else {
-      f->ay.chip.reg[6] = (uint8_t)(b1 & 31);
+      chip->reg[6] = (uint8_t)(b1 & 31);
     }
     if (b1 & 64) *temp_mixer |= 8;
 
@@ -246,9 +348,15 @@ static void get_registers(fls_file* f, fls_channel* chan, uint8_t* temp_mixer) {
   *temp_mixer >>= 1;
 }
 
-/* Players.pas:11337-11521, FLS_Get_Registers (minus CheckLoopAndStop -
- * matches pt3/pt1/gtr_get_registers's own precedent). */
-static void fls_get_registers(fls_file* f) {
+/* Players.pas:11337-11521, FLS_Get_Registers. MIG-0108: the
+ * CheckLoopAndStop-equivalent check now lives in fls_file_make_buffer's
+ * tick loop instead of here (see its own comment) - functionally
+ * equivalent since nothing else touches global_tick_counter in
+ * between. MIG-0112: `chip` is the target AY register file this frame's
+ * writes land in - `&f->ay.chip` for standalone/self playback, or an
+ * EXTERNAL chip when this format is playlist-paired as Turbosound's
+ * second voice (see stc_file.c's own comment on this same shape). */
+static void fls_get_registers(fls_file* f, ay_chip* chip) {
   uint8_t temp_mixer;
 
   f->delay_counter--;
@@ -268,34 +376,60 @@ static void fls_get_registers(fls_file* f) {
           f->chan_c.address_in_pattern = fls_pattern_ptr(f->data, n, 2);
         }
       }
-      pattern_interpreter(f, &f->chan_a);
+      pattern_interpreter(f, chip, &f->chan_a);
     }
     f->chan_b.note_skip_counter--;
-    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, &f->chan_b);
+    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_b);
     f->chan_c.note_skip_counter--;
-    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, &f->chan_c);
+    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_c);
     f->delay_counter = f->delay;
   }
 
   temp_mixer = 0;
-  get_registers(f, &f->chan_a, &temp_mixer);
-  get_registers(f, &f->chan_b, &temp_mixer);
-  get_registers(f, &f->chan_c, &temp_mixer);
+  get_registers(f, chip, &f->chan_a, &temp_mixer);
+  get_registers(f, chip, &f->chan_b, &temp_mixer);
+  get_registers(f, chip, &f->chan_c, &temp_mixer);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 7, temp_mixer);
+  ay_chip_set_ay_register_fast(chip, 7, temp_mixer);
 
-  f->ay.chip.reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
-  f->ay.chip.reg[1] = (uint8_t)(f->chan_a.ton >> 8);
-  f->ay.chip.reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
-  f->ay.chip.reg[3] = (uint8_t)(f->chan_b.ton >> 8);
-  f->ay.chip.reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
-  f->ay.chip.reg[5] = (uint8_t)(f->chan_c.ton >> 8);
+  chip->reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
+  chip->reg[1] = (uint8_t)(f->chan_a.ton >> 8);
+  chip->reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
+  chip->reg[3] = (uint8_t)(f->chan_b.ton >> 8);
+  chip->reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
+  chip->reg[5] = (uint8_t)(f->chan_c.ton >> 8);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+  ay_chip_set_ay_register_fast(chip, 8, f->chan_a.amplitude);
+  ay_chip_set_ay_register_fast(chip, 9, f->chan_b.amplitude);
+  ay_chip_set_ay_register_fast(chip, 10, f->chan_c.amplitude);
 
   f->global_tick_counter++;
+}
+
+/* Players.pas:8732-8746, CheckLoopAndStop(CNum) + one fls_get_registers
+ * call - the reusable "advance one interrupt frame's worth of registers
+ * into `chip`" building block MIG-0112's playlist-pairing driver needs
+ * (player_step_registers, player.c). Returns false once this format's own
+ * natural end is reached (mirrors Real_End[CNum] going true). */
+bool fls_file_step_registers(fls_file* f, ay_chip* chip) {
+  /* Players.pas:8730-8746, CheckLoopAndStop(CNum) - Force_Loop
+   * (MIG-0114) lets register generation continue past the natural
+   * end (so a shorter Turbosound-paired voice keeps looping audibly)
+   * while still marking real_end_all true, matching `if Do_Loop or
+   * Force_Loop then ...Counter := ...Max; if not Do_Loop then begin
+   * Real_End[CNum] := True; if not Force_Loop then Exit(True); end;`
+   * exactly. */
+  if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop || f->force_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    }
+    if (!f->do_loop) {
+      f->real_end_all = true;
+      if (!f->force_loop) return false;
+    }
+  }
+  fls_get_registers(f, chip);
+  return true;
 }
 
 int fls_file_make_buffer(fls_file* f, int16_t* buf, int buffer_length) {
@@ -308,23 +442,31 @@ int fls_file_make_buffer(fls_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
-    fls_get_registers(f);
+    /* Players.pas: FLS_Get_Registers's own first statement, `if
+     * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
+     * MIG-0108/MIG-0112) - fls_file_step_registers is the shared building
+     * block player_step_registers (player.c) also uses when this format
+     * is playlist-paired as Turbosound's second voice; here it targets
+     * this file's own private chip (standalone use). */
+    if (!fls_file_step_registers(f, &f->ay.chip)) break;
     if (!ay->int_flag) {
       ay->number_of_tiks = ay_tiks_in_interrupt << 32;
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   return ay->buf_len;
 }

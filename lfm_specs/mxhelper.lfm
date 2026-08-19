@@ -1,0 +1,141 @@
+object FrmMxHlp: TFrmMxHlp
+  Left = 714
+  Height = 224
+  Top = 250
+  Width = 339
+  AutoSize = True
+  BorderIcons = []
+  BorderStyle = bsDialog
+  Caption = 'Mixer Amplifier Helper'
+  ClientHeight = 224
+  ClientWidth = 339
+  LCLVersion = '3.0.0.3'
+  object ChansRG: TRadioGroup
+    AnchorSideLeft.Control = Owner
+    AnchorSideTop.Control = Owner
+    Left = 8
+    Height = 131
+    Top = 8
+    Width = 322
+    AutoFill = True
+    AutoSize = True
+    BorderSpacing.Left = 8
+    BorderSpacing.Top = 8
+    BorderSpacing.Right = 8
+    Caption = 'AY-3-8910/YM2149F Channels Allocation'
+    ChildSizing.LeftRightSpacing = 4
+    ChildSizing.TopBottomSpacing = 4
+    ChildSizing.HorizontalSpacing = 8
+    ChildSizing.VerticalSpacing = 2
+    ChildSizing.EnlargeHorizontal = crsHomogenousChildResize
+    ChildSizing.EnlargeVertical = crsHomogenousChildResize
+    ChildSizing.ShrinkHorizontal = crsScaleChilds
+    ChildSizing.ShrinkVertical = crsScaleChilds
+    ChildSizing.Layout = cclLeftToRightThenTopToBottom
+    ChildSizing.ControlsPerLine = 3
+    ClientHeight = 111
+    ClientWidth = 318
+    Columns = 3
+    Font.Height = -12
+    ItemIndex = 6
+    Items.Strings = (
+      'AY ABC Stereo'
+      'AY ACB Stereo'
+      'AY BAC Stereo'
+      'AY BCA Stereo'
+      'AY CAB Stereo'
+      'AY CBA Stereo'
+      'YM ABC Stereo'
+      'YM ACB Stereo'
+      'YM BAC Stereo'
+      'YM BCA Stereo'
+      'YM CAB Stereo'
+      'YM CBA Stereo'
+      'Mono'
+    )
+    ParentFont = False
+    TabOrder = 0
+  end
+  object TSDMAChG: TCheckGroup
+    AnchorSideLeft.Control = ChansRG
+    AnchorSideTop.Control = ChansRG
+    AnchorSideTop.Side = asrBottom
+    Left = 8
+    Height = 68
+    Top = 143
+    Width = 193
+    AutoFill = True
+    AutoSize = True
+    BorderSpacing.Top = 4
+    BorderSpacing.Bottom = 8
+    Caption = 'Leave space for additional device'
+    ChildSizing.LeftRightSpacing = 4
+    ChildSizing.TopBottomSpacing = 4
+    ChildSizing.HorizontalSpacing = 8
+    ChildSizing.VerticalSpacing = 2
+    ChildSizing.EnlargeHorizontal = crsHomogenousChildResize
+    ChildSizing.EnlargeVertical = crsHomogenousChildResize
+    ChildSizing.ShrinkHorizontal = crsScaleChilds
+    ChildSizing.ShrinkVertical = crsScaleChilds
+    ChildSizing.Layout = cclLeftToRightThenTopToBottom
+    ChildSizing.ControlsPerLine = 1
+    ClientHeight = 48
+    ClientWidth = 189
+    Font.Height = -12
+    Items.Strings = (
+      'ZX Turbo-Sound'
+      'STe DMA-Sound'
+    )
+    ParentFont = False
+    TabOrder = 1
+    Data = {
+      020000000303
+    }
+  end
+  object Button1: TButton
+    AnchorSideLeft.Control = Button2
+    AnchorSideTop.Control = Button2
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = Button2
+    AnchorSideRight.Side = asrBottom
+    Left = 213
+    Height = 28
+    Top = 183
+    Width = 117
+    Anchors = [akTop, akLeft, akRight]
+    AutoSize = True
+    BorderSpacing.Top = 6
+    Caption = 'Set'
+    Constraints.MinHeight = 28
+    Constraints.MinWidth = 64
+    Default = True
+    Font.Height = -12
+    ModalResult = 1
+    ParentFont = False
+    TabOrder = 3
+  end
+  object Button2: TButton
+    AnchorSideLeft.Control = TSDMAChG
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = ChansRG
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = ChansRG
+    AnchorSideRight.Side = asrBottom
+    Left = 213
+    Height = 28
+    Top = 149
+    Width = 117
+    Anchors = [akTop, akLeft, akRight]
+    AutoSize = True
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 10
+    Cancel = True
+    Caption = 'Cancel'
+    Constraints.MinHeight = 28
+    Constraints.MinWidth = 64
+    Font.Height = -12
+    ModalResult = 2
+    ParentFont = False
+    TabOrder = 2
+  end
+end

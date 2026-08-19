@@ -73,8 +73,8 @@ typedef struct gui_visualizer {
   bool spa_has_marker[GUI_VIS_SPA_NUM];
 
   /* MainWin.pas: RedrawVisChannels' ca/cb/cc (post-Calc "visual"
-   * amplitude, TSMode's max-across-chips collapsed away - see this
-   * port's own established single-chip scope, MIG-0007). */
+   * amplitude) - MainWin.pas:5402-5410, the max of chip 0's and (when
+   * TSMode) chip 1's own per-channel amplitude (MIG-0110). */
   int amp_a, amp_b, amp_c;
 } gui_visualizer;
 

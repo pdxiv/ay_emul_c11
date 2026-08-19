@@ -19,9 +19,20 @@ echo "== Building ay_emul (oracle) =="
 
 echo "== Building engine/ + dump_engine_state =="
 (cd "$ROOT/engine" && make >/dev/null)
+# MIG-0010: pre-build tools/ay_export's own vendored LhASsA (LZH "-lh5-")
+# object files - vtx_export.c (used below for the stc_vtx_raw gate) needs
+# lh_compress, and this is the one dependency dump_engine_state itself
+# can't just compile inline (LhASsA is C89, built with -DHOST=1 - see
+# tools/ay_export/Makefile's own LHASSA_CFLAGS).
+(cd "$ROOT/tools/ay_export" && make >/dev/null)
 gcc -std=c11 -Wall -Wextra -O2 \
   -I"$ROOT/engine/include" -I"$ROOT/engine/third_party/z80" -I"$ROOT/engine/third_party/musashi" \
-  dump_engine_state.c "$ROOT/engine/libayengine.a" -o dump_engine_state -lm
+  -I"$ROOT/tools/ay_player/include" -I"$ROOT/tools/ay_export/include" \
+  -I"$ROOT/engine/third_party/lhassa/Source/include" \
+  dump_engine_state.c "$ROOT/tools/ay_player/src/wav.c" \
+  "$ROOT/tools/ay_export/src/vtx_export.c" \
+  "$ROOT/engine/third_party/lhassa/Source/src"/*.o \
+  "$ROOT/engine/libayengine.a" -o dump_engine_state -lm
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -366,6 +377,35 @@ else
   status=1
 fi
 
+# MIG-0010 update: FT.OUT/FT.EPSG live playback (out_file_make_buffer/
+# epsg_file_make_buffer) against synthetic fixtures - no real .out/.epsg
+# file exists anywhere in this project's corpus (see tests/oracle_diff/
+# synthetic/gen_out_epsg.py's own comment). ay_player already reaches
+# these two formats generically through player_load/player_make_buffer
+# with no format-specific glue needed, same as every other format's own
+# wav_export_* gate above.
+AY_EMUL_ORACLE=out_file AY_EMUL_ORACLE_FILE="$ROOT/tests/oracle_diff/synthetic/test.out" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_out_file.wav" "$ORACLE_BIN"
+"$ROOT/tools/ay_player/ay_player" "$ROOT/tests/oracle_diff/synthetic/test.out" \
+  --wav="$WORKDIR/player_out_file.wav" --seconds=180 >/dev/null
+if cmp -s "$WORKDIR/oracle_out_file.wav" "$WORKDIR/player_out_file.wav"; then
+  echo "[PASS] out_file (synthetic test.out): oracle and ay_player WAV output byte-identical"
+else
+  echo "[FAIL] out_file (synthetic test.out): WAV output differs"
+  status=1
+fi
+
+AY_EMUL_ORACLE=epsg_file AY_EMUL_ORACLE_FILE="$ROOT/tests/oracle_diff/synthetic/test.epsg" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_epsg_file.wav" "$ORACLE_BIN"
+"$ROOT/tools/ay_player/ay_player" "$ROOT/tests/oracle_diff/synthetic/test.epsg" \
+  --wav="$WORKDIR/player_epsg_file.wav" --seconds=180 >/dev/null
+if cmp -s "$WORKDIR/oracle_epsg_file.wav" "$WORKDIR/player_epsg_file.wav"; then
+  echo "[PASS] epsg_file (synthetic test.epsg): oracle and ay_player WAV output byte-identical"
+else
+  echo "[FAIL] epsg_file (synthetic test.epsg): WAV output differs"
+  status=1
+fi
+
 # wav_export (AY): only 512 frames (1 buffer) - deliberately stays inside
 # the byte-identical prefix MIG-0018 already established for this exact
 # file (matches for ~987-1005 frames before a small, known, non-content
@@ -407,6 +447,33 @@ for pt3_name in "ZAGON_07_remixDJ_EchoMAKROSS.pt3" "ZELiNAPI.pt3"; do
     echo "[PASS] wav_export (PT3, $pt3_name): oracle and ay_player WAV output byte-identical"
   else
     echo "[FAIL] wav_export (PT3, $pt3_name): WAV output differs"
+    status=1
+  fi
+done
+
+# ts_pair_pt3 (MIG-0109): real Turbosound self-pairing oracle coverage -
+# drives OracleHarness.pas's RunPT3TSPairWAVExportTest (a near-copy of
+# RunPT3WAVExportTest that genuinely activates TSMode/PLConsts[1] for a
+# TS-tagged file, mirroring TrModLoaded's own TS-byte detection, rather
+# than RunPT3WAVExportTest's own hardcoded TSMode:=False) against both
+# real TS-tagged files test_corpus_76 has (Alone_Coder_-_PARAM_TS.pt3,
+# Shiru_-_kirby_bq_ver.pt3 - both version 7 with a non-space byte at file
+# offset 98) and ay_player's own auto-detecting pt3_file_load/ts_mode
+# path, with NO --ignore-end (ts_pair_pt3's own PLConsts[0/1].Global_
+# Tick_Max is a MaxInt sentinel just like wav_export_pt3's, so natural-end
+# never fires within 204800 frames either). Genuine byte-for-byte
+# validated coverage of the dual-chip mixing path (engine/ay.c's chip2/
+# ts_mode) and PT3's own self-pairing (engine/pt3_file.c's voice[2]) -
+# not formula-derived confidence.
+for ts_name in "Alone_Coder_-_PARAM_TS.pt3" "Shiru_-_kirby_bq_ver.pt3"; do
+  AY_EMUL_ORACLE=ts_pair_pt3 AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/$ts_name" \
+    AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_ts_pair.wav" "$ORACLE_BIN"
+  "$ROOT/tools/ay_player/ay_player" "$ROOT/test_corpus_76/$ts_name" \
+    --wav="$WORKDIR/player_ts_pair.wav" --frames=204800 >/dev/null
+  if cmp -s "$WORKDIR/oracle_ts_pair.wav" "$WORKDIR/player_ts_pair.wav"; then
+    echo "[PASS] ts_pair_pt3 ($ts_name): oracle and ay_player dual-chip WAV output byte-identical"
+  else
+    echo "[FAIL] ts_pair_pt3 ($ts_name): WAV output differs"
     status=1
   fi
 done
@@ -469,6 +536,293 @@ for id_fmt in NEWDANCE.asc:ASC MISTERS_BOX.as0:ASC0 "Girls_of_Meladze.stp:STP" \
     status=1
   fi
 done
+
+# get_time: MIG-0103/MIG-0104 ported each of the 13 non-{AY,YM,VTX,SNDH}
+# tracker formats' own GetTimeXXX duration-precompute into engine/, and
+# player_get_tick_position/player_real_end_all read the resulting
+# global_tick_max/loop_tick fields for real seeking and natural
+# end-of-song (MIG-0101/MIG-0108) - but unlike PT3's own GetTimePT3 port
+# (spot-checked once against the real oracle, byte-for-byte, when it was
+# first ported), none of the other 12 formats' computed durations had
+# ever been checked against the real Pascal GetTimeXXX output for an
+# EXACT tick-count match; only that the resulting fields were non-zero
+# (identify_ay_file's IntegrityCheck) or that AUDIO stayed byte-identical
+# (wav_export above - which exercises the tick loop but never surfaces
+# GetTimeXXX's own separate, non-audio duration-precompute pass at all).
+# Sweeps every matching file in test_corpus_76 (not just one per format,
+# since this exact class of bug - see MIG-0111 - turned out to only
+# reproduce on one specific file out of several) through both
+# OracleHarness.pas's RunGetTimeTest (get_time scenario) and dump_engine_
+# state's own get_time scenario (added for this gate), text-diffing the
+# resulting "time=N\nloop=M" pair exactly.
+for gt_fmt in pt1 gtr fls stc stp pt2 fxm psm asc asc0 ftc psc sqt pt3; do
+  case "$gt_fmt" in
+    pt1) gt_ext="pt1" ;; gtr) gt_ext="gtr" ;; fls) gt_ext="fls" ;;
+    stc) gt_ext="stc" ;; stp) gt_ext="stp" ;; pt2) gt_ext="pt2" ;;
+    fxm) gt_ext="fxm" ;; psm) gt_ext="psm" ;; asc) gt_ext="asc" ;;
+    asc0) gt_ext="as0" ;; ftc) gt_ext="ftc" ;; psc) gt_ext="psc" ;;
+    sqt) gt_ext="sqt" ;; pt3) gt_ext="pt3" ;;
+  esac
+  for gt_path in "$ROOT/test_corpus_76"/*."$gt_ext"; do
+    [ -e "$gt_path" ] || continue
+    gt_fname=$(basename "$gt_path")
+    AY_EMUL_ORACLE=get_time AY_EMUL_ORACLE_FILE="$gt_path" \
+      AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_get_time.txt" "$ORACLE_BIN"
+    ./dump_engine_state get_time "$WORKDIR/engine_get_time.txt" "$gt_fmt" "$gt_path"
+    if cmp -s "$WORKDIR/oracle_get_time.txt" "$WORKDIR/engine_get_time.txt"; then
+      echo "[PASS] get_time ($gt_fmt, $gt_fname): $(tr '\n' ' ' < "$WORKDIR/engine_get_time.txt")"
+    else
+      echo "[FAIL] get_time ($gt_fmt, $gt_fname): oracle=$(tr '\n' ' ' < "$WORKDIR/oracle_get_time.txt") engine=$(tr '\n' ' ' < "$WORKDIR/engine_get_time.txt")"
+      status=1
+    fi
+  done
+done
+
+# stc_pair (MIG-0112): real oracle coverage for PLAYLIST-LEVEL Turbosound
+# pairing of two INDEPENDENTLY loaded voices (as opposed to ts_pair_pt3
+# above, MIG-0109's own PT3 SELF-pairing) - OracleHarness.pas's
+# RunSTCPairWAVExportTest drives the same LoadTrackerModule/
+# All_GetRegisters[CNum] building blocks TrModLoaded itself uses (TrModLoaded
+# is Players.pas implementation-private, not callable from the harness -
+# see that procedure's own comment), loading AWAY.stc into BOTH voices
+# (this port's own real .ayl "ts" pairing always loads the same file
+# twice - see gui/include/gui/playlist.h's own gui_playlist_entry
+# comment) - against dump_engine_state's own stc_pair scenario, which
+# drives the real production entry point (player_pair_load_song/
+# player_pair_make_buffer, the same calls gui/src/playback.c makes).
+AY_EMUL_ORACLE=stc_pair AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/AWAY.stc" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_stc_pair.wav" "$ORACLE_BIN"
+./dump_engine_state stc_pair "$WORKDIR/engine_stc_pair.wav" "$ROOT/test_corpus_76/AWAY.stc"
+if cmp -s "$WORKDIR/oracle_stc_pair.wav" "$WORKDIR/engine_stc_pair.wav"; then
+  echo "[PASS] stc_pair (AWAY.stc x2): oracle and player_pair dual-INDEPENDENT-voice WAV output byte-identical"
+else
+  echo "[FAIL] stc_pair (AWAY.stc x2): WAV output differs"
+  status=1
+fi
+
+# MIG-0114: same stc_pair pattern above (see its own comment for the full
+# citation), extended to the other 10 pairing-eligible tracker formats
+# still needing real oracle coverage (RunXXXPairWAVExportTest procedures
+# in OracleHarness.pas / run_XXX_pair in dump_engine_state.c). FXM is
+# deliberately excluded - see dump_engine_state.c's own DEFINE_PAIR_RUNNER
+# comment and migration_debt.yaml for why.
+pair_fmt() {
+  fmt="$1"; scenario="$2"; corpus_file="$3"
+  AY_EMUL_ORACLE="$scenario" AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/$corpus_file" \
+    AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_${scenario}.wav" "$ORACLE_BIN"
+  ./dump_engine_state "$scenario" "$WORKDIR/engine_${scenario}.wav" "$ROOT/test_corpus_76/$corpus_file"
+  if cmp -s "$WORKDIR/oracle_${scenario}.wav" "$WORKDIR/engine_${scenario}.wav"; then
+    echo "[PASS] $scenario ($corpus_file x2): oracle and player_pair dual-INDEPENDENT-voice WAV output byte-identical"
+  else
+    echo "[FAIL] $scenario ($corpus_file x2): WAV output differs"
+    status=1
+  fi
+}
+pair_fmt pt1  pt1_pair  DEMON.pt1
+pair_fmt gtr  gtr_pair  L.Boy_broken.gtr
+pair_fmt fls  fls_pair  SimpletonGift1.fls
+pair_fmt stp  stp_pair  Girls_of_Meladze.stp
+pair_fmt pt2  pt2_pair  NOR.MUS..pt2
+pair_fmt psm  psm_pair  m16.psm
+pair_fmt asc  asc_pair  NEWDANCE.asc
+pair_fmt asc0 asc0_pair MISTERS_BOX.as0
+pair_fmt ftc  ftc_pair  Nostalgy_Party_Version.ftc
+pair_fmt psc  psc_pair  Inbetween_remix.psc
+pair_fmt sqt  sqt_pair  MotorAnimation.sqt
+
+# MIG-0016: sndh_ice_unpack vs the real Pascal sndh_UnpackFile, directly
+# (not through a full playback pass - impractically slow for SNDH, see
+# MIG-0021) - byte-for-byte comparison of the raw depacked buffer, using
+# test_corpus_76/megaintr.snd (a real, user-supplied ICE-compressed SNDH
+# file, "Mega Intro" by Paradox - the only ICE-compressed file in this
+# repo, and what made this gate possible at all).
+AY_EMUL_ORACLE=sndh_unpack AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/megaintr.snd" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_sndh_unpack.bin" "$ORACLE_BIN"
+./dump_engine_state sndh_unpack "$WORKDIR/engine_sndh_unpack.bin" "$ROOT/test_corpus_76/megaintr.snd"
+if cmp -s "$WORKDIR/oracle_sndh_unpack.bin" "$WORKDIR/engine_sndh_unpack.bin"; then
+  echo "[PASS] sndh_unpack (megaintr.snd): oracle and sndh_ice_unpack depacked buffer byte-identical"
+else
+  echo "[FAIL] sndh_unpack (megaintr.snd): depacked buffer differs"
+  status=1
+fi
+
+# MIG-0010: psg_export_write vs the real Pascal PSG_Converter's own
+# VBL2PSG branch (Convs.pas:672-895), using STC (this project's own
+# established oracle-validation reference format) - byte-for-byte
+# comparison of the whole exported .psg file.
+AY_EMUL_ORACLE=stc_psg_export AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/AWAY.stc" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_stc_psg.psg" "$ORACLE_BIN"
+./dump_engine_state stc_psg_export "$WORKDIR/engine_stc_psg.psg" "$ROOT/test_corpus_76/AWAY.stc"
+if cmp -s "$WORKDIR/oracle_stc_psg.psg" "$WORKDIR/engine_stc_psg.psg"; then
+  echo "[PASS] stc_psg_export (AWAY.stc): oracle and psg_export_write byte-identical"
+else
+  echo "[FAIL] stc_psg_export (AWAY.stc): exported .psg file differs"
+  status=1
+fi
+
+# MIG-0010: vtx_export's raw (PRE-COMPRESSION) register buffer vs the
+# real Pascal VTX_Converter's own VBL2VTX branch (Convs.pas:897-1064) -
+# deliberately NOT a comparison of a real, LZH-compressed .vtx file (see
+# vtx_export.h's own vtx_export_debug_write_raw_regs comment for why the
+# compressed bytes are not expected to match real Pascal's own encoder -
+# same policy as Musashi/superzazu-z80 for CPU timing).
+AY_EMUL_ORACLE=stc_vtx_raw AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/AWAY.stc" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_stc_vtxraw.bin" "$ORACLE_BIN"
+./dump_engine_state stc_vtx_raw "$WORKDIR/engine_stc_vtxraw.bin" "$ROOT/test_corpus_76/AWAY.stc"
+if cmp -s "$WORKDIR/oracle_stc_vtxraw.bin" "$WORKDIR/engine_stc_vtxraw.bin"; then
+  echo "[PASS] stc_vtx_raw (AWAY.stc): oracle and vtx_export's raw register buffer byte-identical"
+else
+  echo "[FAIL] stc_vtx_raw (AWAY.stc): raw register buffer differs"
+  status=1
+fi
+
+# MIG-0010 update: psg_export_write against a real .ay file (FT.AY),
+# using RunAYPSGExportTest's own replication of AY_Get_Registers driven
+# through OutInitialConverter (Convs.pas's own real OutProc for this
+# path - NOT InitialOutProc, which real playback uses; see
+# migration_debt.yaml for the reentrant-SynthesizerAY pitfall this
+# distinction avoids). Confirms a real .ay file's own FT.AY genuinely
+# reaches Convs.pas's generic VBL2PSG "else" branch, not a special path.
+AY_EMUL_ORACLE=ay_psg_export AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/MetalMania.ay" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_ay_psg.psg" "$ORACLE_BIN"
+./dump_engine_state ay_psg_export "$WORKDIR/engine_ay_psg.psg" "$ROOT/test_corpus_76/MetalMania.ay"
+if cmp -s "$WORKDIR/oracle_ay_psg.psg" "$WORKDIR/engine_ay_psg.psg"; then
+  echo "[PASS] ay_psg_export (MetalMania.ay): oracle and psg_export_write byte-identical"
+else
+  echo "[FAIL] ay_psg_export (MetalMania.ay): exported .psg file differs"
+  status=1
+fi
+
+# MIG-0010 update: psg_export_write against a real .ym file (FT.YM5/
+# YM6), using RunYMPSGExportTest's own replication of All_GetRegisters
+# [0](0) bound to YM5i_Get_Registers/YM6i_Get_Registers directly (found,
+# during this entry's own development, that these two are fully self-
+# contained and must NOT be wrapped in the ym6_cur_tik-gated/YM6_Extra_
+# GetRegisters composite ym_file_make_buffer's own inner loop uses -
+# see migration_debt.yaml for the bug this caught and fixed in this
+# port's own ym_file_step_registers).
+AY_EMUL_ORACLE=ym_psg_export AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/Batman_Journey.ym" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_ym_psg.psg" "$ORACLE_BIN"
+./dump_engine_state ym_psg_export "$WORKDIR/engine_ym_psg.psg" "$ROOT/test_corpus_76/Batman_Journey.ym"
+if cmp -s "$WORKDIR/oracle_ym_psg.psg" "$WORKDIR/engine_ym_psg.psg"; then
+  echo "[PASS] ym_psg_export (Batman_Journey.ym): oracle and psg_export_write byte-identical"
+else
+  echo "[FAIL] ym_psg_export (Batman_Journey.ym): exported .psg file differs"
+  status=1
+fi
+
+# MIG-0010 update: psg_export_write against a real .vtx file, using
+# RunVTXPSGExportTest's own replication of All_GetRegisters[0](0) bound
+# directly to VTX_YM3_YM3b_Get_Registers - confirms the missing Position_
+# In_VTX loop-wraparound check (which lives in MakeBufferVTX's own outer
+# loop, not inside VTX_YM3_YM3b_Get_Registers itself) genuinely doesn't
+# matter for a non-looping single-pass export (see migration_debt.yaml).
+AY_EMUL_ORACLE=vtx_psg_export AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/GB2_5.vtx" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_vtx_psg.psg" "$ORACLE_BIN"
+./dump_engine_state vtx_psg_export "$WORKDIR/engine_vtx_psg.psg" "$ROOT/test_corpus_76/GB2_5.vtx"
+if cmp -s "$WORKDIR/oracle_vtx_psg.psg" "$WORKDIR/engine_vtx_psg.psg"; then
+  echo "[PASS] vtx_psg_export (GB2_5.vtx): oracle and psg_export_write byte-identical"
+else
+  echo "[FAIL] vtx_psg_export (GB2_5.vtx): exported .psg file differs"
+  status=1
+fi
+
+# MIG-0010 update: psg_export_write against OUT/EPSG sources - OUT_Get_
+# Registers/EPSG_Get_Registers (Players.pas:8801-8840/8907-8922), used
+# here exactly like Convs.pas's own OUT2PSG/EPSG2PSG. Same synthetic-
+# fixture rationale as the out_file/epsg_file playback gates above.
+AY_EMUL_ORACLE=out_psg_export AY_EMUL_ORACLE_FILE="$ROOT/tests/oracle_diff/synthetic/test.out" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_out_psg.psg" "$ORACLE_BIN"
+./dump_engine_state out_psg_export "$WORKDIR/engine_out_psg.psg" "$ROOT/tests/oracle_diff/synthetic/test.out"
+if cmp -s "$WORKDIR/oracle_out_psg.psg" "$WORKDIR/engine_out_psg.psg"; then
+  echo "[PASS] out_psg_export (synthetic test.out): oracle and psg_export_write byte-identical"
+else
+  echo "[FAIL] out_psg_export (synthetic test.out): exported .psg file differs"
+  status=1
+fi
+
+AY_EMUL_ORACLE=epsg_psg_export AY_EMUL_ORACLE_FILE="$ROOT/tests/oracle_diff/synthetic/test.epsg" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_epsg_psg.psg" "$ORACLE_BIN"
+./dump_engine_state epsg_psg_export "$WORKDIR/engine_epsg_psg.psg" "$ROOT/tests/oracle_diff/synthetic/test.epsg"
+if cmp -s "$WORKDIR/oracle_epsg_psg.psg" "$WORKDIR/engine_epsg_psg.psg"; then
+  echo "[PASS] epsg_psg_export (synthetic test.epsg): oracle and psg_export_write byte-identical"
+else
+  echo "[FAIL] epsg_psg_export (synthetic test.epsg): exported .psg file differs"
+  status=1
+fi
+
+# MIG-0010 update: vtx_export's raw (PRE-COMPRESSION) register buffer
+# against AY/YM/VTX sources (same "compare pre-compression only" policy
+# as stc_vtx_raw above), using the SAME loading logic as the ay/ym/
+# vtx_psg_export gates above but VTXSaveRegisters' own column-major
+# tail instead of PSG's diff-log tail.
+AY_EMUL_ORACLE=ay_vtx_raw AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/MetalMania.ay" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_ay_vtxraw.bin" "$ORACLE_BIN"
+./dump_engine_state ay_vtx_raw "$WORKDIR/engine_ay_vtxraw.bin" "$ROOT/test_corpus_76/MetalMania.ay"
+if cmp -s "$WORKDIR/oracle_ay_vtxraw.bin" "$WORKDIR/engine_ay_vtxraw.bin"; then
+  echo "[PASS] ay_vtx_raw (MetalMania.ay): oracle and vtx_export's raw register buffer byte-identical"
+else
+  echo "[FAIL] ay_vtx_raw (MetalMania.ay): raw register buffer differs"
+  status=1
+fi
+
+AY_EMUL_ORACLE=ym_vtx_raw AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/Batman_Journey.ym" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_ym_vtxraw.bin" "$ORACLE_BIN"
+./dump_engine_state ym_vtx_raw "$WORKDIR/engine_ym_vtxraw.bin" "$ROOT/test_corpus_76/Batman_Journey.ym"
+if cmp -s "$WORKDIR/oracle_ym_vtxraw.bin" "$WORKDIR/engine_ym_vtxraw.bin"; then
+  echo "[PASS] ym_vtx_raw (Batman_Journey.ym): oracle and vtx_export's raw register buffer byte-identical"
+else
+  echo "[FAIL] ym_vtx_raw (Batman_Journey.ym): raw register buffer differs"
+  status=1
+fi
+
+AY_EMUL_ORACLE=vtx_vtx_raw AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/GB2_5.vtx" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_vtx_vtxraw.bin" "$ORACLE_BIN"
+./dump_engine_state vtx_vtx_raw "$WORKDIR/engine_vtx_vtxraw.bin" "$ROOT/test_corpus_76/GB2_5.vtx"
+if cmp -s "$WORKDIR/oracle_vtx_vtxraw.bin" "$WORKDIR/engine_vtx_vtxraw.bin"; then
+  echo "[PASS] vtx_vtx_raw (GB2_5.vtx): oracle and vtx_export's raw register buffer byte-identical"
+else
+  echo "[FAIL] vtx_vtx_raw (GB2_5.vtx): raw register buffer differs"
+  status=1
+fi
+
+# MIG-0010 update: psg_export_write_pair's TSMode dual-file output
+# against two GENUINELY DIFFERENT, DIFFERENT-LENGTH files (AWAY.stc,
+# 9600 ticks; Ninja7_1.stc, 5632 ticks) with force_loop=true (settings.
+# pas's own default) - exercises VBL2PSG's nMax-selection and Force_Loop
+# gating (Convs.pas:778-809 / Players.pas:8732-8746's CheckLoopAndStop),
+# neither of which the prior same-file-paired-with-itself smoke test
+# could reach (both voices there always share one length). Reuses the
+# force_loop mechanism MIG-0114 already ported for WAV playback pairing.
+AY_EMUL_ORACLE=stc_pair_psg_export AY_EMUL_ORACLE_FILE="$ROOT/test_corpus_76/AWAY.stc" \
+  AY_EMUL_ORACLE_FILE2="$ROOT/test_corpus_76/Ninja7_1.stc" \
+  AY_EMUL_ORACLE_OUT="$WORKDIR/oracle_stcpair_psg1.psg" \
+  AY_EMUL_ORACLE_OUT2="$WORKDIR/oracle_stcpair_psg2.psg" "$ORACLE_BIN"
+./dump_engine_state stc_pair_psg_export "$WORKDIR/engine_stcpair_psg1.psg" \
+  "$WORKDIR/engine_stcpair_psg2.psg" "$ROOT/test_corpus_76/AWAY.stc" \
+  "$ROOT/test_corpus_76/Ninja7_1.stc"
+if cmp -s "$WORKDIR/oracle_stcpair_psg1.psg" "$WORKDIR/engine_stcpair_psg1.psg" && \
+   cmp -s "$WORKDIR/oracle_stcpair_psg2.psg" "$WORKDIR/engine_stcpair_psg2.psg"; then
+  echo "[PASS] stc_pair_psg_export (AWAY.stc + Ninja7_1.stc, force_loop=true): oracle and psg_export_write_pair byte-identical on both voices"
+else
+  echo "[FAIL] stc_pair_psg_export (AWAY.stc + Ninja7_1.stc): dual-voice output differs"
+  status=1
+fi
+
+# NOTE: an extensionless variant of the loop above (copying each corpus
+# file to a bare name to force both sides through the real Tier C ->
+# Module_Detector fallback, rather than Tier A's unconditional extension
+# trust) was attempted here and pulled again - see migration_debt.yaml
+# MIG-0023 for why: OracleHarness's Add_Songs_From_File(path, Detect=True)
+# returns zero PlayListItems (format=NONE) for every extensionless file
+# tried, including ones the engine itself already plays back byte-
+# identical to the oracle elsewhere in this script (stc_file/ftc_file/
+# gtr_file/psc_file/pt3_file all PASS above) - so the file content is
+# provably fine and Module_Detector's own F_STC/F_ST1/etc "tunes finder"
+# enable flags default True (Players.pas:849-865), ruling out the two
+# most obvious causes. Root cause not yet found; a genuinely oracle-
+# verified (not just corpus-cross-checked) confirmation of the sliding
+# scan itself remains open follow-up work.
 
 # wav_export (SNDH): deliberately NOT gated here. This was originally
 # noted (MIG-0021/0026) as producing zero frames after a 3+ minute stall,

@@ -71,6 +71,45 @@ typedef struct ftc_file {
   uint32_t positions_offset;
   int64_t global_tick_counter;
 
+  int64_t global_tick_max; /* GetTimeFTC's `Tm` output - MIG-0103: computed
+                            * by ftc_file_load via a faithful port of
+                            * GetTimeFTC (Players.pas:15769-15887), a
+                            * pattern-opcode-only simulation (no audio
+                            * synthesis) that walks the position list
+                            * exactly once, including its own DLCatcher
+                            * (256) safety net against pathologically long
+                            * per-position note-walks. 0 only if the
+                            * file's position list is somehow degenerate
+                            * (empty/malformed) - real files always get a
+                            * real value. MIG-0108: now consumed by
+                            * ftc_file_make_buffer's own CheckLoopAndStop
+                            * check, no longer informational-only. */
+  int64_t loop_tick;       /* GetTimeFTC's `Lp` output - the tick at which
+                            * FTC_Loop_Position is reached; informational
+                            * only in this port (no caller currently reads
+                            * it). */
+  bool do_loop;      /* MIG-0108: Players.pas: Do_Loop - see pt3_file.h's
+                       * own fields for the shape this follows. */
+  bool force_loop;   /* MIG-0114: Players.pas: Force_Loop (Tools.pas's
+                       * CBForceLoop checkbox) - lets THIS voice keep
+                       * generating registers (and so keep audibly
+                       * looping its own pattern data) past its own
+                       * natural end instead of freezing on its last
+                       * frame's frozen register values, so a shorter
+                       * voice in a mismatched-length Turbosound pair
+                       * doesn't just go silent/frozen while the longer
+                       * voice keeps playing - see <fmt>_file_step_
+                       * registers's own CheckLoopAndStop-equivalent
+                       * logic (Players.pas:8730-8746) for the exact
+                       * semantics. Distinct from do_loop (which makes
+                       * the WHOLE song loop, never setting real_end_
+                       * all at all) - force_loop still marks real_
+                       * end_all true, it just doesn't stop register
+                       * generation once that happens. */
+  bool real_end_all; /* MIG-0108: Players.pas: Real_End_All, set by
+                       * CheckLoopAndStop once global_tick_counter
+                       * reaches global_tick_max with do_loop false. */
+
   /* Raw (untranscoded CP1251), space-trimmed module title - Players.pas:
    * "else if FType = FT.FTC" (7372-7380): a fixed 42-byte field at file
    * offset 8 (within FTC_MusicName[0..68]@0's larger 69-byte area) -
@@ -84,4 +123,12 @@ ftc_file_status ftc_file_load(ftc_file* f, const uint8_t* data, size_t size,
 #define FTC_FILE_INTERRUPT_FREQ_DEF 50000
 #define FTC_FILE_SAMPLE_RATE_DEF 48000
 int ftc_file_make_buffer(ftc_file* f, int16_t* buf, int buffer_length);
+
+/* MIG-0112: advances one interrupt frame's worth of registers into
+ * `chip` (any ay_chip, not necessarily f->ay.chip - see ftc_file.c's own
+ * comment) and returns false once this format's own natural end is
+ * reached. The building block engine/player.c's playlist-Turbosound-
+ * pairing driver (player_step_registers) uses; ftc_file_make_buffer
+ * itself now just calls this with &f->ay.chip for standalone playback. */
+bool ftc_file_step_registers(ftc_file* f, ay_chip* chip);
 #endif

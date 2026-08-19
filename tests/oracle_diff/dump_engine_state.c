@@ -23,11 +23,16 @@
 #include "ay_engine/formats/ftc_file.h"
 #include "ay_engine/formats/psc_file.h"
 #include "ay_engine/formats/sqt_file.h"
+#include "ay_engine/formats/sndh_file.h"
 #include "ay_engine/formats/vtx_file.h"
 #include "ay_engine/hw/z80_bus.h"
 #include "ay_engine/hw/m68k_bus.h"
 #include "ay_engine/hw/mfp.h"
 #include "ay_engine/hw/dma_sound.h"
+#include "ay_engine/player.h"
+#include "ay_engine/psg_export.h"
+#include "ay_export/vtx_export.h"
+#include "ay_player/wav.h"
 #include "m68k.h"
 
 typedef struct {
@@ -555,6 +560,16 @@ static void run_pt1_file(const char* out_path, const char* pt1_path) {
     fprintf(stderr, "run_pt1_file: pt1_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: pt1_file_load now computes a real global_tick_max
+   * (see pt1_file.h) and pt1_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunPT1FileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -592,6 +607,16 @@ static void run_gtr_file(const char* out_path, const char* gtr_path) {
     fprintf(stderr, "run_gtr_file: gtr_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: gtr_file_load now computes a real global_tick_max
+   * (see gtr_file.h) and gtr_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunGTRFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -629,6 +654,16 @@ static void run_fls_file(const char* out_path, const char* fls_path) {
     fprintf(stderr, "run_fls_file: fls_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: fls_file_load now computes a real global_tick_max
+   * (see fls_file.h) and fls_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunFLSFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -666,6 +701,16 @@ static void run_stc_file(const char* out_path, const char* stc_path) {
     fprintf(stderr, "run_stc_file: stc_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: stc_file_load now computes a real global_tick_max
+   * (see stc_file.h) and stc_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunSTCFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -703,6 +748,16 @@ static void run_stp_file(const char* out_path, const char* stp_path) {
     fprintf(stderr, "run_stp_file: stp_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: stp_file_load now computes a real global_tick_max
+   * (see stp_file.h) and stp_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunSTPFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -740,6 +795,16 @@ static void run_pt2_file(const char* out_path, const char* pt2_path) {
     fprintf(stderr, "run_pt2_file: pt2_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: pt2_file_load now computes a real global_tick_max
+   * (see pt2_file.h) and pt2_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunPT2FileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -779,6 +844,16 @@ static void run_fxm_file(const char* out_path, const char* fxm_path) {
     fprintf(stderr, "run_fxm_file: fxm_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: fxm_file_load now computes a real global_tick_max
+   * (see fxm_file.h) and fxm_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunFXMFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -816,6 +891,16 @@ static void run_psm_file(const char* out_path, const char* psm_path) {
     fprintf(stderr, "run_psm_file: psm_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: psm_file_load now computes a real global_tick_max
+   * (see psm_file.h) and psm_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunPSMFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -853,6 +938,16 @@ static void run_asc_file(const char* out_path, const char* asc_path, bool is_asc
     fprintf(stderr, "run_asc_file: asc_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: asc_file_load now computes a real global_tick_max
+   * (see asc_file.h) and asc_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunASCFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -890,6 +985,16 @@ static void run_ftc_file(const char* out_path, const char* ftc_path) {
     fprintf(stderr, "run_ftc_file: ftc_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: ftc_file_load now computes a real global_tick_max
+   * (see ftc_file.h) and ftc_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunFTCFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -927,6 +1032,16 @@ static void run_psc_file(const char* out_path, const char* psc_path) {
     fprintf(stderr, "run_psc_file: psc_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: psc_file_load now computes a real global_tick_max
+   * (see psc_file.h) and psc_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunPSCFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -964,6 +1079,16 @@ static void run_sqt_file(const char* out_path, const char* sqt_path) {
     fprintf(stderr, "run_sqt_file: sqt_file_load failed (%d)\n", (int)st);
     exit(1);
   }
+  /* MIG-0108: sqt_file_load now computes a real global_tick_max
+   * (see sqt_file.h) and sqt_file_make_buffer can return short of
+   * the requested 512 frames once it's reached - the oracle side
+   * (OracleHarness.pas's RunSQTFileTest) deliberately runs with a
+   * sentinel Global_Tick_Max instead (never edited to keep pace, see
+   * this repo's own standing rule on the Pascal oracle), always
+   * producing exactly 400*512 frames; do_loop=true matches that same
+   * "never stop early" behavior here (see player_set_do_loop's own
+   * comment for the equivalent ay_player --ignore-end fix). */
+  f.do_loop = true;
 
   FILE* out = fopen(out_path, "wb");
   int16_t buf[512 * 2];
@@ -1017,6 +1142,428 @@ static void run_vtx_file(const char* out_path, const char* vtx_path) {
   fclose(out);
   vtx_file_free(&f);
 }
+
+/* Companion to ay_emul/OracleHarness.pas's RunGetTimeTest (MIG-0103's own
+ * IntegrityCheck oracle, not previously reused for THIS purpose): loads a
+ * tracker-format file through the same format-specific loader used by
+ * this file's other run_*_file scenarios above, then prints its
+ * precomputed global_tick_max/loop_tick in the exact "time=N\nloop=M\n"
+ * text format RunGetTimeTest itself writes, so run_diff.sh can text-diff
+ * them directly. This closes MIG-0103/MIG-0104's own remaining oracle-
+ * validation gap: those entries ported each format's GetTimeXXX
+ * duration-precompute math into engine/, and it clearly RUNS and returns
+ * plausible-looking non-zero values (confirmed by identify_ay_file's
+ * IntegrityCheck, which already reused these same fields) - but, unlike
+ * PT3's own GetTimePT3 port (MIG-0101, cross-checked against the real
+ * oracle's exact tick count), none of the other 12 formats' computed
+ * durations had ever been checked against the real Pascal GetTimeXXX
+ * output for an exact tick-count match. STC and FLS's own GetTimeSTC/
+ * GetTimeFLS have no `Lp` (loop) output parameter at all (see their
+ * Players.pas signatures - only `Tm`), matching this port's own structs,
+ * which correspondingly have no loop_tick field for these two formats
+ * either - lp is left at 0 for them here, exactly matching
+ * RunGetTimeTest's own Lp-stays-0 behavior for the same two formats. */
+static void run_get_time(const char* out_path, const char* format,
+                          const char* file_path) {
+  FILE* in = fopen(file_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_get_time: cannot open %s\n", file_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_get_time: short read on %s\n", file_path);
+    exit(1);
+  }
+  fclose(in);
+
+  int64_t tm = 0, lp = 0;
+  bool ok = false;
+
+  if (strcmp(format, "pt1") == 0) {
+    pt1_file f;
+    ok = pt1_file_load(&f, data, (size_t)sz, PT1_FILE_SAMPLE_RATE_DEF) == PT1_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "gtr") == 0) {
+    gtr_file f;
+    ok = gtr_file_load(&f, data, (size_t)sz, GTR_FILE_SAMPLE_RATE_DEF) == GTR_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "fls") == 0) {
+    fls_file f;
+    ok = fls_file_load(&f, data, (size_t)sz, FLS_FILE_SAMPLE_RATE_DEF) == FLS_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = 0; /* GetTimeFLS has no Lp */ }
+  } else if (strcmp(format, "stc") == 0) {
+    stc_file f;
+    ok = stc_file_load(&f, data, (size_t)sz, STC_FILE_SAMPLE_RATE_DEF) == STC_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = 0; /* GetTimeSTC has no Lp */ }
+  } else if (strcmp(format, "stp") == 0) {
+    stp_file f;
+    ok = stp_file_load(&f, data, (size_t)sz, STP_FILE_SAMPLE_RATE_DEF) == STP_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "pt2") == 0) {
+    pt2_file f;
+    ok = pt2_file_load(&f, data, (size_t)sz, PT2_FILE_SAMPLE_RATE_DEF) == PT2_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "pt3") == 0) {
+    pt3_file f;
+    ok = pt3_file_load(&f, data, (size_t)sz, PT3_FILE_SAMPLE_RATE_DEF) == PT3_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "fxm") == 0) {
+    fxm_file f;
+    ok = fxm_file_load(&f, data, (size_t)sz, FXM_FILE_SAMPLE_RATE_DEF) == FXM_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "psm") == 0) {
+    psm_file f;
+    ok = psm_file_load(&f, data, (size_t)sz, PSM_FILE_SAMPLE_RATE_DEF) == PSM_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "asc") == 0) {
+    asc_file f;
+    ok = asc_file_load(&f, data, (size_t)sz, false, ASC_FILE_SAMPLE_RATE_DEF) == ASC_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "asc0") == 0) {
+    asc_file f;
+    ok = asc_file_load(&f, data, (size_t)sz, true, ASC_FILE_SAMPLE_RATE_DEF) == ASC_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "ftc") == 0) {
+    ftc_file f;
+    ok = ftc_file_load(&f, data, (size_t)sz, FTC_FILE_SAMPLE_RATE_DEF) == FTC_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "psc") == 0) {
+    psc_file f;
+    ok = psc_file_load(&f, data, (size_t)sz, PSC_FILE_SAMPLE_RATE_DEF) == PSC_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else if (strcmp(format, "sqt") == 0) {
+    sqt_file f;
+    ok = sqt_file_load(&f, data, (size_t)sz, SQT_FILE_SAMPLE_RATE_DEF) == SQT_FILE_OK;
+    if (ok) { tm = f.global_tick_max; lp = f.loop_tick; }
+  } else {
+    fprintf(stderr, "run_get_time: unknown format '%s'\n", format);
+    free(data);
+    exit(1);
+  }
+  free(data);
+
+  if (!ok) {
+    fprintf(stderr, "run_get_time: %s_file_load failed for %s\n", format, file_path);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "w");
+  fprintf(out, "time=%lld\n", (long long)tm);
+  fprintf(out, "loop=%lld\n", (long long)lp);
+  fclose(out);
+}
+
+/* MIG-0016: real oracle coverage companion to OracleHarness.pas's
+ * RunSNDHUnpackTest - calls sndh_ice_unpack directly (not through a full
+ * playback pass, which is impractically slow for SNDH - see
+ * migration_debt.yaml MIG-0021) and dumps the raw depacked buffer for a
+ * direct byte-for-byte comparison. */
+static void run_sndh_unpack(const char* out_path, const char* sndh_path) {
+  FILE* in = fopen(sndh_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_sndh_unpack: cannot open %s\n", sndh_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_sndh_unpack: short read on %s\n", sndh_path);
+    exit(1);
+  }
+  fclose(in);
+
+  uint8_t* unpacked;
+  size_t unpacked_size;
+  sndh_file_status st = sndh_ice_unpack(data, (size_t)sz, &unpacked, &unpacked_size);
+  free(data);
+  if (st != SNDH_FILE_OK) {
+    fprintf(stderr, "run_sndh_unpack: sndh_ice_unpack failed (%d) for %s\n",
+            (int)st, sndh_path);
+    exit(1);
+  }
+
+  FILE* out = fopen(out_path, "wb");
+  if (!out) {
+    fprintf(stderr, "run_sndh_unpack: cannot open %s for writing\n", out_path);
+    exit(1);
+  }
+  fwrite(unpacked, 1, unpacked_size, out);
+  fclose(out);
+  free(unpacked);
+}
+
+/* MIG-0010: real oracle coverage companion to OracleHarness.pas's
+ * RunSTCPSGExportTest - loads the file via the real production entry
+ * point (player_load) and calls psg_export_write directly, matching
+ * how that Pascal scenario replicates Convs.pas's VBL2PSG loop and
+ * writes the same "PSG\x1a" + register-diff-log format. */
+static void run_psg_export(const char* out_path, const char* in_path) {
+  FILE* in = fopen(in_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_psg_export: cannot open %s\n", in_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_psg_export: short read on %s\n", in_path);
+    exit(1);
+  }
+  fclose(in);
+
+  player p;
+  player_status st = player_load(&p, in_path, data, (size_t)sz, 44100);
+  free(data);
+  if (st != PLAYER_OK) {
+    fprintf(stderr, "run_psg_export: player_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+  if (!psg_export_write(out_path, &p)) {
+    fprintf(stderr, "run_psg_export: psg_export_write failed\n");
+    exit(1);
+  }
+  player_free(&p);
+}
+
+/* MIG-0010: real oracle coverage companion to OracleHarness.pas's
+ * RunSTCVTXRawTest/RunAYVTXRawTest/RunYMVTXRawTest/RunVTXVTXRawTest -
+ * see vtx_export.h's own vtx_export_debug_write_raw_regs comment for
+ * why this compares the PRE-COMPRESSION register buffer rather than a
+ * real, LZH-compressed .vtx file (compression has no single byte-exact
+ * target, unlike the register data feeding it). Generic over any
+ * player_load-able format (works for AY/YM/VTX/STC alike via
+ * player_step_registers_any). */
+static void run_vtx_raw(const char* out_path, const char* in_path) {
+  FILE* in = fopen(in_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_vtx_raw: cannot open %s\n", in_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_vtx_raw: short read on %s\n", in_path);
+    exit(1);
+  }
+  fclose(in);
+
+  player p;
+  player_status st = player_load(&p, in_path, data, (size_t)sz, 44100);
+  free(data);
+  if (st != PLAYER_OK) {
+    fprintf(stderr, "run_vtx_raw: player_load failed (%d)\n", (int)st);
+    exit(1);
+  }
+  if (!vtx_export_debug_write_raw_regs(out_path, &p)) {
+    fprintf(stderr, "run_vtx_raw: vtx_export_debug_write_raw_regs failed\n");
+    exit(1);
+  }
+  player_free(&p);
+}
+
+/* MIG-0010 update: real oracle coverage companion to OracleHarness.pas's
+ * RunSTCPairPSGExportTest - loads TWO GENUINELY DIFFERENT, DIFFERENT-
+ * LENGTH files as the two player_pair voices (unlike run_stc_pair below,
+ * which - matching this port's real .ayl "ts" semantics - always loads
+ * the same file twice) specifically to exercise VBL2PSG's own nMax-
+ * selection and Force_Loop gating, neither of which is reachable when
+ * both voices share one length. Sets force_loop=true, matching
+ * settings.pas's own Force_Loop default (and ay_export's own default). */
+static void run_stc_pair_psg_export(const char* out_path1,
+                                     const char* out_path2,
+                                     const char* stc_path1,
+                                     const char* stc_path2) {
+  size_t sz1, sz2;
+  FILE* in1 = fopen(stc_path1, "rb");
+  if (!in1) {
+    fprintf(stderr, "run_stc_pair_psg_export: cannot open %s\n", stc_path1);
+    exit(1);
+  }
+  fseek(in1, 0, SEEK_END);
+  sz1 = (size_t)ftell(in1);
+  fseek(in1, 0, SEEK_SET);
+  uint8_t* data1 = (uint8_t*)malloc(sz1);
+  if (fread(data1, 1, sz1, in1) != sz1) {
+    fprintf(stderr, "run_stc_pair_psg_export: short read on %s\n", stc_path1);
+    exit(1);
+  }
+  fclose(in1);
+
+  FILE* in2 = fopen(stc_path2, "rb");
+  if (!in2) {
+    fprintf(stderr, "run_stc_pair_psg_export: cannot open %s\n", stc_path2);
+    exit(1);
+  }
+  fseek(in2, 0, SEEK_END);
+  sz2 = (size_t)ftell(in2);
+  fseek(in2, 0, SEEK_SET);
+  uint8_t* data2 = (uint8_t*)malloc(sz2);
+  if (fread(data2, 1, sz2, in2) != sz2) {
+    fprintf(stderr, "run_stc_pair_psg_export: short read on %s\n", stc_path2);
+    exit(1);
+  }
+  fclose(in2);
+
+  player_pair pair;
+  player_status st = player_pair_load_song(
+      &pair, stc_path1, data1, sz1, stc_path2, data2, sz2,
+      STC_FILE_SAMPLE_RATE_DEF, 0, true);
+  free(data1);
+  free(data2);
+  if (st != PLAYER_OK) {
+    fprintf(stderr, "run_stc_pair_psg_export: player_pair_load_song failed (%d)\n",
+            (int)st);
+    exit(1);
+  }
+  if (!pair.active) {
+    fprintf(stderr, "run_stc_pair_psg_export: pairing did not activate\n");
+    exit(1);
+  }
+  player_pair_set_force_loop(&pair, true);
+  if (!psg_export_write_pair(out_path1, out_path2, &pair)) {
+    fprintf(stderr, "run_stc_pair_psg_export: psg_export_write_pair failed\n");
+    exit(1);
+  }
+  player_pair_free(&pair);
+}
+
+/* MIG-0112: real oracle coverage companion to OracleHarness.pas's
+ * RunSTCPairWAVExportTest - loads the SAME file as both player_pair
+ * voices (matching this port's real .ayl "ts" pairing semantics - see
+ * gui/include/gui/playlist.h's own gui_playlist_entry comment) via the
+ * exact production entry point gui/src/playback.c uses
+ * (player_pair_load_song/player_pair_make_buffer), and renders the
+ * same WaveExportNumBuffers*WaveExportBufferLen (862*512) frame window
+ * every other wav_export_<fmt> gate in this project already uses, so
+ * it can be byte-compared directly against the Pascal side's own
+ * WriteTrackerWAV output. */
+static void run_stc_pair(const char* out_path, const char* stc_path) {
+  FILE* in = fopen(stc_path, "rb");
+  if (!in) {
+    fprintf(stderr, "run_stc_pair: cannot open %s\n", stc_path);
+    exit(1);
+  }
+  fseek(in, 0, SEEK_END);
+  long sz = ftell(in);
+  fseek(in, 0, SEEK_SET);
+  uint8_t* data = (uint8_t*)malloc((size_t)sz);
+  if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {
+    fprintf(stderr, "run_stc_pair: short read on %s\n", stc_path);
+    exit(1);
+  }
+  fclose(in);
+
+  player_pair pair;
+  player_status st =
+      player_pair_load_song(&pair, stc_path, data, (size_t)sz, stc_path, data,
+                             (size_t)sz, STC_FILE_SAMPLE_RATE_DEF, 0, true);
+  free(data);
+  if (st != PLAYER_OK) {
+    fprintf(stderr, "run_stc_pair: player_pair_load_song failed (%d)\n", (int)st);
+    exit(1);
+  }
+  if (!pair.active) {
+    fprintf(stderr, "run_stc_pair: pairing did not activate for %s\n", stc_path);
+    exit(1);
+  }
+
+  wav_writer w;
+  if (!wav_writer_open(&w, out_path, 2, STC_FILE_SAMPLE_RATE_DEF, 16)) {
+    fprintf(stderr, "run_stc_pair: cannot open %s for writing\n", out_path);
+    exit(1);
+  }
+  int16_t buf[512 * 2];
+  for (int n = 0; n < 862; n++) {
+    if (player_pair_real_end_all(&pair)) break;
+    int frames = player_pair_make_buffer(&pair, buf, 512);
+    wav_writer_write(&w, buf, frames);
+    if (frames < 512) break;
+  }
+  wav_writer_close(&w);
+  player_pair_free(&pair);
+}
+
+/* MIG-0114: same player_pair_load_song/player_pair_make_buffer harness as
+ * run_stc_pair above (see its own comment for the full citation), one
+ * per pairing-eligible tracker format still needing real oracle coverage.
+ * FXM is deliberately excluded - Players.pas's FXM_StekA/B/C stek arrays
+ * are UNIT-LEVEL globals, not indexed by CNum, so a genuine dual-FXM
+ * Turbosound pair has a real cross-voice shared-mutable-state
+ * interaction in the original that this port's per-instance fxm_file
+ * structs don't (and shouldn't) replicate - see migration_debt.yaml. */
+#define DEFINE_PAIR_RUNNER(name, sample_rate_def)                            \
+  static void run_##name##_pair(const char* out_path, const char* path) {    \
+    FILE* in = fopen(path, "rb");                                            \
+    if (!in) {                                                               \
+      fprintf(stderr, "run_" #name "_pair: cannot open %s\n", path);         \
+      exit(1);                                                               \
+    }                                                                        \
+    fseek(in, 0, SEEK_END);                                                  \
+    long sz = ftell(in);                                                     \
+    fseek(in, 0, SEEK_SET);                                                  \
+    uint8_t* data = (uint8_t*)malloc((size_t)sz);                            \
+    if (fread(data, 1, (size_t)sz, in) != (size_t)sz) {                      \
+      fprintf(stderr, "run_" #name "_pair: short read on %s\n", path);       \
+      exit(1);                                                               \
+    }                                                                        \
+    fclose(in);                                                              \
+                                                                               \
+    player_pair pair;                                                        \
+    player_status st = player_pair_load_song(                                \
+        &pair, path, data, (size_t)sz, path, data, (size_t)sz,               \
+        sample_rate_def, 0, true);                                           \
+    free(data);                                                              \
+    if (st != PLAYER_OK) {                                                   \
+      fprintf(stderr, "run_" #name "_pair: player_pair_load_song failed (%d)\n", \
+              (int)st);                                                      \
+      exit(1);                                                               \
+    }                                                                        \
+    if (!pair.active) {                                                      \
+      fprintf(stderr, "run_" #name "_pair: pairing did not activate for %s\n", \
+              path);                                                         \
+      exit(1);                                                               \
+    }                                                                        \
+                                                                               \
+    wav_writer w;                                                            \
+    if (!wav_writer_open(&w, out_path, 2, sample_rate_def, 16)) {            \
+      fprintf(stderr, "run_" #name "_pair: cannot open %s for writing\n",    \
+              out_path);                                                     \
+      exit(1);                                                               \
+    }                                                                        \
+    int16_t buf[512 * 2];                                                    \
+    for (int n = 0; n < 862; n++) {                                          \
+      if (player_pair_real_end_all(&pair)) break;                            \
+      int frames = player_pair_make_buffer(&pair, buf, 512);                 \
+      wav_writer_write(&w, buf, frames);                                     \
+      if (frames < 512) break;                                               \
+    }                                                                        \
+    wav_writer_close(&w);                                                    \
+    player_pair_free(&pair);                                                 \
+  }
+
+DEFINE_PAIR_RUNNER(pt1, PT1_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(gtr, GTR_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(fls, FLS_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(stp, STP_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(pt2, PT2_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(psm, PSM_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(asc, ASC_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(asc0, ASC_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(ftc, FTC_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(psc, PSC_FILE_SAMPLE_RATE_DEF)
+DEFINE_PAIR_RUNNER(sqt, SQT_FILE_SAMPLE_RATE_DEF)
+
+#undef DEFINE_PAIR_RUNNER
 
 int main(int argc, char** argv) {
   if (argc < 3) {
@@ -1138,6 +1685,126 @@ int main(int argc, char** argv) {
       return 1;
     }
     run_vtx_file(out_path, argv[3]);
+  } else if (strcmp(scenario, "get_time") == 0) {
+    if (argc < 5) {
+      fprintf(stderr, "usage: %s get_time <output-path> <format> <file-path>\n", argv[0]);
+      return 1;
+    }
+    run_get_time(out_path, argv[3], argv[4]);
+  } else if (strcmp(scenario, "sndh_unpack") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s sndh_unpack <output-path> <sndh-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_sndh_unpack(out_path, argv[3]);
+  } else if (strcmp(scenario, "stc_psg_export") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s stc_psg_export <output-path> <stc-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psg_export(out_path, argv[3]);
+  } else if (strcmp(scenario, "ay_psg_export") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s ay_psg_export <output-path> <ay-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psg_export(out_path, argv[3]);
+  } else if (strcmp(scenario, "ym_psg_export") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s ym_psg_export <output-path> <ym-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psg_export(out_path, argv[3]);
+  } else if (strcmp(scenario, "vtx_psg_export") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s vtx_psg_export <output-path> <vtx-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psg_export(out_path, argv[3]);
+  } else if (strcmp(scenario, "out_psg_export") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s out_psg_export <output-path> <out-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psg_export(out_path, argv[3]);
+  } else if (strcmp(scenario, "epsg_psg_export") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s epsg_psg_export <output-path> <epsg-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_psg_export(out_path, argv[3]);
+  } else if (strcmp(scenario, "stc_vtx_raw") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s stc_vtx_raw <output-path> <stc-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_vtx_raw(out_path, argv[3]);
+  } else if (strcmp(scenario, "ay_vtx_raw") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s ay_vtx_raw <output-path> <ay-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_vtx_raw(out_path, argv[3]);
+  } else if (strcmp(scenario, "ym_vtx_raw") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s ym_vtx_raw <output-path> <ym-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_vtx_raw(out_path, argv[3]);
+  } else if (strcmp(scenario, "stc_pair_psg_export") == 0) {
+    if (argc < 6) {
+      fprintf(stderr,
+              "usage: %s stc_pair_psg_export <out1-path> <out2-path> "
+              "<stc1-path> <stc2-path>\n",
+              argv[0]);
+      return 1;
+    }
+    run_stc_pair_psg_export(out_path, argv[3], argv[4], argv[5]);
+  } else if (strcmp(scenario, "vtx_vtx_raw") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s vtx_vtx_raw <output-path> <vtx-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_vtx_raw(out_path, argv[3]);
+  } else if (strcmp(scenario, "stc_pair") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s stc_pair <output-path> <stc-file-path>\n", argv[0]);
+      return 1;
+    }
+    run_stc_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "pt1_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s pt1_pair <output-path> <pt1-file-path>\n", argv[0]); return 1; }
+    run_pt1_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "gtr_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s gtr_pair <output-path> <gtr-file-path>\n", argv[0]); return 1; }
+    run_gtr_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "fls_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s fls_pair <output-path> <fls-file-path>\n", argv[0]); return 1; }
+    run_fls_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "stp_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s stp_pair <output-path> <stp-file-path>\n", argv[0]); return 1; }
+    run_stp_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "pt2_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s pt2_pair <output-path> <pt2-file-path>\n", argv[0]); return 1; }
+    run_pt2_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "psm_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s psm_pair <output-path> <psm-file-path>\n", argv[0]); return 1; }
+    run_psm_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "asc_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s asc_pair <output-path> <asc-file-path>\n", argv[0]); return 1; }
+    run_asc_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "asc0_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s asc0_pair <output-path> <as0-file-path>\n", argv[0]); return 1; }
+    run_asc0_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "ftc_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s ftc_pair <output-path> <ftc-file-path>\n", argv[0]); return 1; }
+    run_ftc_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "psc_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s psc_pair <output-path> <psc-file-path>\n", argv[0]); return 1; }
+    run_psc_pair(out_path, argv[3]);
+  } else if (strcmp(scenario, "sqt_pair") == 0) {
+    if (argc < 4) { fprintf(stderr, "usage: %s sqt_pair <output-path> <sqt-file-path>\n", argv[0]); return 1; }
+    run_sqt_pair(out_path, argv[3]);
   } else {
     fprintf(stderr, "unknown scenario '%s'\n", scenario);
     return 1;

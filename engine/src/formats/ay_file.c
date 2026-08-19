@@ -365,7 +365,9 @@ int ay_file_make_buffer(ay_file* f, int16_t* buf, int buffer_length) {
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
   ay->chip_type = AY_CHIP_TYPE_AY;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
@@ -404,4 +406,24 @@ int ay_file_make_buffer(ay_file* f, int16_t* buf, int buffer_length) {
     }
   }
   return ay->buf_len;
+}
+
+bool ay_file_step_registers(ay_file* f) {
+  if (f->real_end_all) return false;
+  for (;;) {
+    int64_t tact_before = f->bus.current_tact;
+    z80_bus_step(&f->bus);
+    if (f->bus.current_tact < tact_before) {
+      f->ay.previous_tact -= f->bus.max_tstates;
+      f->global_tick_counter++;
+      if (f->global_tick_counter >= f->global_tick_max) {
+        if (f->do_loop) {
+          f->global_tick_counter = f->global_tick_max;
+        } else {
+          f->real_end_all = true;
+        }
+      }
+      return true;
+    }
+  }
 }

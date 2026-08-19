@@ -11,8 +11,12 @@
  * milestone (out of scope here), not this one.
  *
  * Deliberately not ported here (see migration_debt.yaml):
- *  - TSMode / dual-chip (Turbosound) support - single chip only in this
- *    milestone (MIG-0007).
+ *  - TSMode / dual-chip (Turbosound) mixing IS now ported (MIG-0109,
+ *    closing the engine half of MIG-0007) - see chip2/ts_mode below and
+ *    the TSMode branches in ay_synthesizer_stereo16/mono16/stereo8/mono8.
+ *    The visualizer's second-chip VisPoint.R[1] slot is ALSO now ported
+ *    (MIG-0110, closing MIG-0109's own Phase B visualizer follow-up) -
+ *    see ay_vis_point's own comment.
  *  - Atari_MixDMASnd (atari.pas, 68000/Atari-ST DMA sound) - stubbed as a
  *    no-op; out of scope until the Musashi core milestone (MIG-0008).
  *  - Synthesizer_Stereo8 / Synthesizer_Mono8 (8-bit output) - straightforward
@@ -90,21 +94,39 @@ void ay_chip_set_ay_register(ay_chip* c, int num, uint8_t value); /* SetAYRegist
 void ay_chip_set_ay_register_fast(ay_chip* c, int num, uint8_t value); /* SetAYRegisterFast */
 void ay_chip_synthesizer_logic_q(ay_chip* c);
 
-/* AY.pas: TVisPoint (106-116), TSMode's R[1] dropped - single-chip only,
- * matching this port's own established Turbosound scope boundary
- * (MIG-0007, see ay_engine's own file comment). Before ay_vis_calc has
- * run (see ay.c), tn_a/tn_b/tn_c/amp_a/amp_b/amp_c/amp_e/env_p/env_t/
- * mix hold the RAW register snapshot FillVis captured (AY.pas: TonA/
- * AmplitudeA/etc read straight from RegisterAY); ay_vis_calc overwrites
- * tn_a/tn_b/tn_c/amp_a/amp_b/amp_c IN PLACE with the envelope-aware
- * "visual" tone/amplitude values AYVisualisation's own Calc block
- * derives (amp_e/env_p/env_t/mix become stale afterwards, exactly as
- * in the original - never read again post-Calc). */
-typedef struct ay_vis_point {
+/* AY.pas: TVisPoint.R[0..1]'s per-chip record (106-110: AmpA/AmpB/AmpC/
+ * AmpE/TnA/TnB/TnC/EnvP/EnvT/Mix). Before ay_vis_calc has run (see ay.c),
+ * tn_a/tn_b/tn_c/amp_a/amp_b/amp_c/amp_e/env_p/env_t/mix hold the RAW
+ * register snapshot FillVis captured (AY.pas: TonA/AmplitudeA/etc read
+ * straight from RegisterAY); ay_vis_calc overwrites tn_a/tn_b/tn_c/
+ * amp_a/amp_b/amp_c IN PLACE with the envelope-aware "visual" tone/
+ * amplitude values AYVisualisation's own Calc block derives (amp_e/
+ * env_p/env_t/mix become stale afterwards, exactly as in the original -
+ * never read again post-Calc). */
+typedef struct ay_vis_reg {
   int32_t tn_a, tn_b, tn_c;
   int32_t amp_a, amp_b, amp_c;
   int32_t amp_e, env_p, env_t, mix;
-  bool calc; /* AY.pas: Calc (0/1) - memoizes the transform above per slot */
+} ay_vis_reg;
+
+/* AY.pas: TVisPoint (106-116). r[0] is SoundChip[0]'s snapshot, always
+ * captured. r[1] is SoundChip[1]'s snapshot (MIG-0110, closing MIG-0109's
+ * own Phase B follow-up: the visualizer's second-chip slot was tracked as
+ * open debt when TSMode mixing was first ported) - AY.pas's FillVis only
+ * writes r[1] `if TSMode`, and AYVisualisation's own Calc loop
+ * (`for i := 0 to 1 do ... if not TSMode then break`) only PROCESSES r[1]
+ * when TSMode is true AT READ TIME (ay_engine_get_vis_point's call to
+ * ay_vis_calc, not at capture time) - both reproduced exactly here,
+ * including the resulting quirk that r[1] can hold stale data from a
+ * previous TSMode-active point if TSMode has since been turned off, or
+ * (conversely) get processed against genuinely stale/never-written data
+ * if TSMode is turned on again before a fresh point with TSMode active
+ * has been captured. This is a real property of the original's own
+ * mutable-global-checked-lazily design, not a bug introduced here. */
+typedef struct ay_vis_point {
+  ay_vis_reg r[2];
+  bool calc; /* AY.pas: Calc (0/1) - memoizes the transform above, once
+              * per slot per point (not per r[]; see ay_vis_calc) */
 } ay_vis_point;
 
 /* MainWin.pas:1739's VisPosMax is computed at runtime from the actual
@@ -119,17 +141,39 @@ typedef struct ay_vis_point {
 typedef struct ay_engine {
   ay_chip chip; /* AY.pas: SoundChip[0] */
 
+  /* AY.pas: SoundChip[1] - the second chip, used only when ts_mode is set
+   * (Turbosound / dual-chip mixing, MIG-0109). Always kept reset to a
+   * clean, deterministic state by ay_engine_init/ay_engine_reset_chip
+   * regardless of ts_mode, so turning ts_mode on mid-session never reads
+   * stale garbage. Every mixing-weight table, filter, beeper and tick
+   * driver below is genuinely SHARED between chip and chip2 (confirmed by
+   * reading AY.pas's `implementation` var block, AY.pas:185-196: those
+   * globals are declared OUTSIDE TSoundChip, at unit scope) - there is no
+   * per-chip copy of any of it, matching the original exactly. */
+  ay_chip chip2;
+  bool ts_mode; /* AY.pas: TSMode */
+
   ay_chip_type chip_type;   /* AY.pas: ChType */
   uint8_t pre_amp;          /* AY.pas: PreAmp */
   uint8_t pre_amp_max;      /* AY.pas: PreAmpMax */
   int number_of_channels;   /* settings.pas: NumberOfChannels (1 or 2) */
   int sample_bits;          /* settings.pas: SampleBit (8 or 16) */
   uint8_t beeper_max;       /* settings.pas: BeeperMax (BeeperMaxDef=146) */
-  uint8_t atari_dma_max;    /* settings.pas: Atari_DMAMax - 0 disables the
-                             * DMA-sound headroom contribution entirely
-                             * (matches original behavior with DMA sound
-                             * absent/stopped), nonzero when a caller wires
-                             * up engine/dma_sound.h via on_mix_dma below. */
+  uint8_t atari_dma_max;    /* settings.pas: Atari_DMAMax (Atari_DMAMaxDef=
+                             * 146) - MIG-0123. Defaults to 0 here (NOT
+                             * Atari_DMAMaxDef), matching OracleHarness.
+                             * pas's own deliberate `Atari_DMAMax := 0`
+                             * reset before EVERY comparison scenario (a
+                             * test-determinism convention, not the real
+                             * interactive app's own startup default) -
+                             * see gui/src/mainwin.c's do_load_song, the
+                             * one caller that pushes the REAL 146
+                             * interactive default, for the split
+                             * rationale. 0 disables the DMA-sound
+                             * headroom contribution entirely (matches
+                             * original behavior with DMA sound absent/
+                             * stopped); nonzero when a caller wires up
+                             * engine/dma_sound.h via on_mix_dma below. */
   int atari_dma_level;      /* AY.pas: Atari_DMALevel, computed by
                              * ay_engine_calculate_level_tables - the scale
                              * factor engine/dma_sound.h's dma_sound_mix
@@ -183,6 +227,18 @@ typedef struct ay_engine {
    * LevelR := ApplyFilter(...,Filt_XR)`) - not a bug, a deliberate way to
    * keep both channels at the same delay-line position. Reproduced as-is
    * in ay_synthesizer_stereo16. */
+  int filter_quality; /* settings.pas: FilterQuality - the user's raw
+                        * SETTING (0 = "averager" / RBResamAvg, nonzero =
+                        * "FIR-filter" / RBResamFIR), stored here so
+                        * player_set_chip_freq can pass it to
+                        * ay_engine_set_filter on every AY-clock change,
+                        * exactly like Set_Chip_Frq calling
+                        * SetFilter(FilterQuality) (MainWin.pas:1549). Not
+                        * to be confused with is_filt below, which is the
+                        * DERIVED per-sample-rate/per-clock outcome of
+                        * applying this setting (a real .lfm/settings.pas
+                        * default of 1, matching MainWin.pas:926's startup
+                        * SetFilter(1) call - see gui/'s Mixer window). */
   int* filt_k;   /* AY.pas: Filt_K, length filt_m + 1 */
   int filt_m;    /* AY.pas: Filt_M */
   int is_filt;   /* AY.pas: IsFilt - tri-state: -1 disables filtering
@@ -195,7 +251,14 @@ typedef struct ay_engine {
                   * see migration_debt.yaml) already populated Filt_K/Filt_M
                   * - ay_engine_init() defaults to -1 instead so a caller
                   * that hasn't wired up filter coefficients yet gets
-                  * unfiltered output rather than a null-pointer crash. */
+                  * unfiltered output rather than a null-pointer crash.
+                  * gui/'s Mixer window now calls ay_engine_set_filter (via
+                  * player_set_chip_freq) on every song load, which
+                  * replaces this -1 with the real computed state - see
+                  * migration_debt.yaml. ay_player/CLI callers that never
+                  * call player_set_chip_freq are unaffected and keep this
+                  * default, matching their pre-existing, oracle-validated
+                  * unfiltered output exactly. */
   int* filt_xl;  /* AY.pas: Filt_XL, length filt_m + 1 */
   int* filt_xr;  /* AY.pas: Filt_XR, length filt_m + 1 */
   int filt_i;    /* AY.pas: Filt_I */
@@ -245,6 +308,16 @@ void ay_engine_init(ay_engine* e);
 void ay_engine_reset_chip(ay_engine* e, bool zeroregs); /* ResetAYChipEmulation */
 void ay_engine_calculate_level_tables(ay_engine* e); /* Calculate_Level_Tables */
 
+/* AY.pas: Get_Max_of_Level_Tables (1018-1032, MIG-0131) - the max
+ * channel-sum across all 32 envelope steps of the level tables
+ * ay_engine_calculate_level_tables just computed (AL+BL+CL, and AR+BR+CR
+ * too when number_of_channels==2) - used by gui/'s Mixer window to
+ * decide whether to show a clip-warning label (real Pascal:
+ * Calculate_Level_Tables2, MainWin.pas:1799-1816, comparing this against
+ * 127/32767 depending on sample_bits). Call AFTER ay_engine_calculate_
+ * level_tables, same as the original's own call order. */
+int ay_engine_get_max_level(const ay_engine* e);
+
 /* MainWin.pas:1737-1741/4814-4816's VisStep/VisPosMax/VisTickMax setup
  * (MIG-0094) - `latency_seconds` is this port's own ALSA output
  * latency (tools/ay_player/src/alsa_output.c's snd_pcm_set_params 200ms
@@ -292,6 +365,28 @@ void ay_engine_free_filter(ay_engine* e);
  * configuration of the original, see tests/zexall/FIDELITY_GATE.md for the
  * analogous finding on the Z80 core). */
 int ay_apply_filter(int lev, int* filt_x, const int* filt_k, int filt_m, int* filt_i);
+
+/* MainWin.pas: SetSynthesizer's own dispatch (~1746-1759: picks one of
+ * Synthesizer_Stereo16/Mono16/Stereo8/Mono8 based on NumberOfChannels/
+ * SampleBit and assigns it to the `Synthesizer` procedure variable every
+ * caller then invokes uniformly) - reproduced here as a plain dispatch
+ * function (this port has no procedure-variable-of-choice concept, every
+ * caller just calls this instead) based on e->number_of_channels/e->
+ * sample_bits, exactly like ay_synthesizer_ay's own inline dispatch
+ * (which calls this too, MIG-0107 factored the duplicate block out).
+ * Every format's own X_file_make_buffer (ay_file.c through vtx_file.c)
+ * that drives its own tick loop directly (i.e. every format except AY,
+ * which instead reaches ay_synthesizer_ay via z80_bus_step's port-write/
+ * frame-rollover callbacks) MUST call this instead of hardcoding
+ * ay_synthesizer_stereo16 - MIG-0107 found and fixed all 17 that still
+ * did, a real bug this session's mono-output work exposed (calling
+ * player_set_number_of_channels(p, 1) on any of those 17 formats
+ * silently kept emitting STEREO16 frames into a buffer the caller had
+ * sized for MONO16, corrupting memory past the buffer's end - a real
+ * heap-corruption crash, not merely wrong audio). A no-op (does nothing)
+ * if e->buf is NULL, matching ay_synthesizer_ay's own guard (lets
+ * standalone callers drive tick bookkeeping alone without a buffer). */
+void ay_synthesizer_dispatch(ay_engine* e);
 
 /* AY.pas: SynthesizerAY - the cadence function Z80-driven playback
  * (Players.pas's MakeBufferAY) calls from its port-write handlers and once

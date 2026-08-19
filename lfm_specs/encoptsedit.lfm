@@ -1,0 +1,521 @@
+object FrmEncOptsEditor: TFrmEncOptsEditor
+  Left = 887
+  Height = 496
+  Top = 236
+  Width = 680
+  AutoSize = True
+  BorderStyle = bsDialog
+  Caption = 'BASS encoder options editor'
+  ClientHeight = 496
+  ClientWidth = 680
+  OnShow = FormShow
+  Position = poScreenCenter
+  ShowHint = True
+  LCLVersion = '3.0.0.3'
+  object MResult: TMemo
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = Owner
+    AnchorSideBottom.Side = asrBottom
+    Left = 7
+    Height = 89
+    Top = 399
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Bottom = 8
+    Color = clForm
+    ReadOnly = True
+    TabOrder = 10
+    TabStop = False
+  end
+  object ECustom: TEdit
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = Bevel1
+    Left = 7
+    Height = 23
+    Hint = 'See available options list below'
+    Top = 253
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Bottom = 4
+    TabOrder = 8
+    OnChange = ECustomChange
+  end
+  object LResult: TLabel
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = MResult
+    Left = 7
+    Height = 15
+    Top = 384
+    Width = 111
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Top = 4
+    Caption = 'Result options string:'
+  end
+  object Bevel1: TBevel
+    AnchorSideBottom.Control = LOptsHint
+    Left = 7
+    Height = 5
+    Top = 280
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Left = 8
+    BorderSpacing.Bottom = 4
+    Shape = bsBottomLine
+  end
+  object LCustom: TLabel
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = ECustom
+    Left = 7
+    Height = 15
+    Top = 238
+    Width = 144
+    Anchors = [akLeft, akBottom]
+    Caption = 'Additional custom options:'
+  end
+  object EAuthor: TEdit
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = ETitle
+    Left = 7
+    Height = 23
+    Top = 22
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Bottom = 23
+    TabOrder = 1
+    OnChange = EAuthorChange
+  end
+  object ETitle: TEdit
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = EDate
+    Left = 7
+    Height = 23
+    Top = 68
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Bottom = 23
+    TabOrder = 3
+    OnChange = ETitleChange
+  end
+  object EDate: TEdit
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = MComment
+    Left = 7
+    Height = 23
+    Top = 114
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Bottom = 23
+    TabOrder = 5
+    OnChange = EDateChange
+  end
+  object LOptsHint: TLabel
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = MOptsHint
+    Left = 7
+    Height = 15
+    Top = 289
+    Width = 112
+    Anchors = [akLeft, akBottom]
+    Caption = 'Available options list:'
+  end
+  object MOptsHint: TMemo
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = LResult
+    Left = 7
+    Height = 76
+    Hint = 'The syntax is like that of the specified encoders, read its documentation'
+    Top = 304
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Bottom = 4
+    Color = clForm
+    ReadOnly = True
+    TabOrder = 9
+  end
+  object MComment: TMemo
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = LCustom
+    Left = 7
+    Height = 74
+    Hint = 'Line wrapping is allowed'
+    Top = 160
+    Width = 485
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Bottom = 4
+    TabOrder = 7
+    OnChange = MCommentChange
+  end
+  object Bevel2: TBevel
+    AnchorSideLeft.Control = MResult
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = Owner
+    AnchorSideBottom.Control = BApply
+    AnchorSideBottom.Side = asrBottom
+    Left = 500
+    Height = 484
+    Top = 4
+    Width = 7
+    Anchors = [akTop, akLeft, akBottom]
+    BorderSpacing.Left = 8
+    BorderSpacing.Top = 4
+    Shape = bsLeftLine
+  end
+  object SEQualityInt: TSpinEdit
+    AnchorSideLeft.Control = CBQuality
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = CBQuality
+    AnchorSideTop.Side = asrCenter
+    Left = 564
+    Height = 23
+    Top = 6
+    Width = 50
+    BorderSpacing.Right = 8
+    Constraints.MinWidth = 50
+    OnChange = SEQualityIntChange
+    TabOrder = 13
+  end
+  object SEQualityFloat: TFloatSpinEdit
+    AnchorSideLeft.Control = CBQuality
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = CBQuality
+    AnchorSideTop.Side = asrCenter
+    Left = 564
+    Height = 23
+    Top = 6
+    Width = 50
+    BorderSpacing.Right = 8
+    Constraints.MinWidth = 50
+    DecimalPlaces = 1
+    Increment = 0.1
+    MaxValue = 10
+    MinValue = -1
+    OnChange = SEQualityFloatChange
+    TabOrder = 12
+  end
+  object CBQuality: TCheckBox
+    AnchorSideLeft.Control = Bevel2
+    AnchorSideTop.Control = Bevel2
+    Left = 508
+    Height = 19
+    Hint = 'Uncheck for default behavior'
+    Top = 8
+    Width = 56
+    BorderSpacing.Left = 8
+    BorderSpacing.Top = 4
+    Caption = 'Quality'
+    TabOrder = 11
+    OnChange = CBQualityChange
+  end
+  object GBBitrate: TGroupBox
+    AnchorSideLeft.Control = Bevel2
+    AnchorSideTop.Control = CBQuality
+    AnchorSideTop.Side = asrBottom
+    Left = 508
+    Height = 164
+    Top = 35
+    Width = 164
+    AutoSize = True
+    BorderSpacing.Left = 8
+    BorderSpacing.Top = 8
+    BorderSpacing.Right = 8
+    Caption = 'Bitrate control'
+    ClientHeight = 144
+    ClientWidth = 160
+    TabOrder = 14
+    object RBVariable: TRadioButton
+      AnchorSideLeft.Control = GBBitrate
+      AnchorSideTop.Control = RBConstrained
+      AnchorSideTop.Side = asrBottom
+      Left = 4
+      Height = 19
+      Top = 92
+      Width = 60
+      BorderSpacing.Left = 4
+      BorderSpacing.Top = 4
+      Caption = 'Variable'
+      TabOrder = 4
+      OnChange = RBVariableChange
+    end
+    object RBAverage: TRadioButton
+      AnchorSideLeft.Control = GBBitrate
+      AnchorSideTop.Control = RBDefault
+      AnchorSideTop.Side = asrBottom
+      Left = 4
+      Height = 19
+      Top = 23
+      Width = 61
+      BorderSpacing.Left = 4
+      BorderSpacing.Top = 4
+      BorderSpacing.Right = 4
+      Caption = 'Average'
+      TabOrder = 1
+      OnChange = RBAverageChange
+    end
+    object RBFixed: TRadioButton
+      AnchorSideLeft.Control = GBBitrate
+      AnchorSideTop.Control = RBAverage
+      AnchorSideTop.Side = asrBottom
+      Left = 4
+      Height = 19
+      Top = 46
+      Width = 46
+      BorderSpacing.Left = 4
+      BorderSpacing.Top = 4
+      BorderSpacing.Right = 4
+      Caption = 'Fixed'
+      TabOrder = 2
+      OnChange = RBFixedChange
+    end
+    object RBConstrained: TRadioButton
+      AnchorSideLeft.Control = GBBitrate
+      AnchorSideTop.Control = RBFixed
+      AnchorSideTop.Side = asrBottom
+      Left = 4
+      Height = 19
+      Top = 69
+      Width = 82
+      BorderSpacing.Left = 4
+      BorderSpacing.Top = 4
+      BorderSpacing.Right = 4
+      Caption = 'Constrained'
+      TabOrder = 3
+      OnChange = RBConstrainedChange
+    end
+    object RBDefault: TRadioButton
+      AnchorSideLeft.Control = GBBitrate
+      Left = 4
+      Height = 19
+      Top = 0
+      Width = 56
+      BorderSpacing.Left = 4
+      BorderSpacing.Right = 4
+      Caption = 'Default'
+      TabOrder = 0
+      OnChange = RBDefaultChange
+    end
+    object CBBitrate: TCheckBox
+      AnchorSideLeft.Control = GBBitrate
+      AnchorSideTop.Control = CmBBitrate
+      AnchorSideTop.Side = asrCenter
+      Left = 4
+      Height = 19
+      Hint = 'Uncheck for default/unspecified'
+      Top = 119
+      Width = 88
+      BorderSpacing.Left = 4
+      Caption = 'Target bitrate'
+      TabOrder = 6
+      OnChange = CBBitrateChange
+    end
+    object CmBBitrate: TComboBox
+      AnchorSideLeft.Control = CBBitrate
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = SEVBR
+      AnchorSideTop.Side = asrBottom
+      Left = 92
+      Height = 23
+      Top = 117
+      Width = 64
+      BorderSpacing.Top = 4
+      BorderSpacing.Right = 4
+      BorderSpacing.Bottom = 4
+      ItemHeight = 15
+      Items.Strings = (
+        '32'
+        '40'
+        '48'
+        '56'
+        '64'
+        '80'
+        '96'
+        '112'
+        '128'
+        '160'
+        '192'
+        '224'
+        '256'
+        '320'
+      )
+      TabOrder = 7
+      OnChange = CmBBitrateChange
+    end
+    object SEVBR: TFloatSpinEdit
+      AnchorSideLeft.Control = RBVariable
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = RBVariable
+      AnchorSideTop.Side = asrCenter
+      Left = 64
+      Height = 23
+      Hint = 'From 0.000 to 9.999 (0.000 for higher quality, 9.999 for smaller file). You can also specify minimal bitrate in Target birate field.'
+      Top = 90
+      Width = 64
+      BorderSpacing.Right = 4
+      Constraints.MinWidth = 64
+      DecimalPlaces = 3
+      Increment = 0.1
+      MaxValue = 9.999
+      OnChange = SEVBRChange
+      TabOrder = 5
+    end
+  end
+  object BApply: TButton
+    AnchorSideLeft.Control = Bevel2
+    AnchorSideRight.Control = Owner
+    AnchorSideRight.Side = asrBottom
+    AnchorSideBottom.Control = MResult
+    AnchorSideBottom.Side = asrBottom
+    Left = 508
+    Height = 39
+    Hint = 'Continue with filled values'
+    Top = 449
+    Width = 164
+    Anchors = [akLeft, akRight, akBottom]
+    AutoSize = True
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 8
+    Caption = 'Apply'
+    Constraints.MinHeight = 39
+    Default = True
+    ModalResult = 1
+    TabOrder = 17
+  end
+  object BRestore: TButton
+    AnchorSideLeft.Control = Bevel2
+    AnchorSideRight.Control = Owner
+    AnchorSideRight.Side = asrBottom
+    AnchorSideBottom.Control = BSkip
+    Left = 508
+    Height = 39
+    Hint = 'Swap initial and current state'
+    Top = 355
+    Width = 164
+    Anchors = [akLeft, akRight, akBottom]
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 8
+    BorderSpacing.Bottom = 8
+    Caption = 'Restore'
+    Constraints.MinHeight = 39
+    TabOrder = 15
+    OnClick = BRestoreClick
+  end
+  object BSkip: TButton
+    AnchorSideLeft.Control = Bevel2
+    AnchorSideRight.Control = Owner
+    AnchorSideRight.Side = asrBottom
+    AnchorSideBottom.Control = BApply
+    Left = 508
+    Height = 39
+    Hint = 'Continue with initial values'
+    Top = 402
+    Width = 164
+    Anchors = [akLeft, akRight, akBottom]
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 8
+    BorderSpacing.Bottom = 8
+    Cancel = True
+    Caption = 'Skip'
+    Constraints.MinHeight = 39
+    ModalResult = 11
+    TabOrder = 16
+  end
+  object CBAuthor: TCheckBox
+    AnchorSideBottom.Control = EAuthor
+    Left = 7
+    Height = 19
+    Hint = 'Check to auto fill'
+    Top = 3
+    Width = 100
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Top = 8
+    Caption = 'Module author:'
+    TabOrder = 0
+    Visible = False
+    OnChange = CBAuthorChange
+  end
+  object CBTitle: TCheckBox
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = ETitle
+    Left = 7
+    Height = 19
+    Hint = 'Check to auto fill'
+    Top = 49
+    Width = 85
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Top = 4
+    Caption = 'Module title:'
+    TabOrder = 2
+    Visible = False
+    OnChange = CBTitleChange
+  end
+  object CBDate: TCheckBox
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = EDate
+    Left = 7
+    Height = 19
+    Hint = 'Check to auto fill'
+    Top = 95
+    Width = 88
+    Anchors = [akLeft, akBottom]
+    Caption = 'Module date:'
+    TabOrder = 4
+    Visible = False
+    OnChange = CBDateChange
+  end
+  object CBComment: TCheckBox
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = MComment
+    Left = 7
+    Height = 19
+    Hint = 'Check to auto fill'
+    Top = 141
+    Width = 75
+    Anchors = [akLeft, akBottom]
+    Caption = 'Comment:'
+    TabOrder = 6
+    Visible = False
+    OnChange = CBCommentChange
+  end
+  object LAuthor: TLabel
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = EAuthor
+    Left = 7
+    Height = 15
+    Top = 7
+    Width = 82
+    Anchors = [akLeft, akBottom]
+    BorderSpacing.Top = 8
+    Caption = 'Module author:'
+    Visible = False
+  end
+  object LTitle: TLabel
+    AnchorSideTop.Side = asrBottom
+    AnchorSideBottom.Control = ETitle
+    Left = 7
+    Height = 15
+    Top = 53
+    Width = 67
+    Anchors = [akLeft, akBottom]
+    Caption = 'Module title:'
+    Visible = False
+  end
+  object LDate: TLabel
+    AnchorSideBottom.Control = EDate
+    Left = 7
+    Height = 15
+    Top = 99
+    Width = 70
+    Anchors = [akLeft, akBottom]
+    Caption = 'Module date:'
+    Visible = False
+  end
+  object LComment: TLabel
+    AnchorSideBottom.Control = MComment
+    Left = 7
+    Height = 15
+    Top = 145
+    Width = 57
+    Anchors = [akLeft, akBottom]
+    Caption = 'Comment:'
+    Visible = False
+  end
+end

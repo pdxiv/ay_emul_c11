@@ -103,6 +103,27 @@ void gui_playlist_entry_refresh_display(gui_playlist_entry* e) {
     snprintf(e->display + len, sizeof(e->display) - len, " (song %d/%d)",
               e->song_index + 1, e->song_count);
   }
+  /* MIG-0112: PlayList.pas's GetPlayListFileType appends 'x2' to the
+   * file-type column for a Turbosound-paired item whose pair plays the
+   * SAME file (the only case this port's own .ayl support produces -
+   * see gui_playlist_entry's own comment). This port has no separate
+   * file-type column to append that suffix to (playlist_win.c only
+   * ever renders `display`), so the indicator is folded into `display`
+   * itself instead - same signal (pairing status is visible somewhere
+   * in the playlist), relocated to the one place this port actually
+   * shows per-item text. */
+  if (e->has_ts_pair) {
+    size_t len = strlen(e->display);
+    snprintf(e->display + len, sizeof(e->display) - len, " [x2]");
+  }
+}
+
+/* PlayList.pas:902-906's own PLDef_* initial values. */
+void gui_playlist_defaults_init(gui_playlist_defaults* d) {
+  memset(d, 0, sizeof(*d));
+  d->channel_mode = -1;
+  d->ay_freq = -1;
+  d->int_freq = -1;
 }
 
 void gui_playlist_init(gui_playlist* pl) {
@@ -180,10 +201,11 @@ static gui_playlist_entry* push_entry(gui_playlist* pl) {
 static bool probe_song(const uint8_t* data, size_t size, const char* path,
                         int song_index, int* out_song_count,
                         char* out_author, char* out_title,
-                        char* out_comment, player_format* out_format) {
+                        char* out_comment, player_format* out_format,
+                        double* out_duration_seconds) {
   player p;
   player_status st =
-      player_load_song(&p, path, data, size, 48000, song_index);
+      player_load_song(&p, path, data, size, 48000, song_index, true);
   if (st != PLAYER_OK) return false;
   *out_song_count = player_song_count(&p);
   if (out_format) *out_format = p.format;
@@ -195,6 +217,14 @@ static bool probe_song(const uint8_t* data, size_t size, const char* path,
   cp1251_to_utf8(raw_author, out_author, 256);
   cp1251_to_utf8(raw_title, out_title, 256);
   cp1251_to_utf8(raw_comment, out_comment, 256);
+
+  if (out_duration_seconds) {
+    int64_t counter, max;
+    *out_duration_seconds =
+        (player_get_tick_position(&p, &counter, &max) && max > 0)
+            ? (double)max * player_get_seconds_per_tick(&p)
+            : 0.0;
+  }
 
   player_free(&p);
   return true;
@@ -215,8 +245,9 @@ int gui_playlist_add_file(gui_playlist* pl, const char* path) {
   int song_count = 0;
   char author[256], title[256], comment[256];
   player_format format;
+  double duration0;
   if (!probe_song(data, read, path, 0, &song_count, author, title, comment,
-                   &format)) {
+                   &format, &duration0)) {
     free(data);
     return 0;
   }
@@ -227,15 +258,18 @@ int gui_playlist_add_file(gui_playlist* pl, const char* path) {
    * varies per subsong - refetched below for every song_index > 0). */
   for (int i = 0; i < song_count; i++) {
     char this_title[256];
+    double this_duration;
     if (i == 0) {
       strncpy(this_title, title, sizeof(this_title) - 1);
       this_title[sizeof(this_title) - 1] = '\0';
+      this_duration = duration0;
     } else {
       int unused_count;
       char unused_author[256], unused_comment[256];
       if (!probe_song(data, read, path, i, &unused_count, unused_author,
-                       this_title, unused_comment, NULL)) {
+                       this_title, unused_comment, NULL, &this_duration)) {
         this_title[0] = '\0';
+        this_duration = 0.0;
       }
     }
 
@@ -245,12 +279,80 @@ int gui_playlist_add_file(gui_playlist* pl, const char* path) {
     e->song_index = i;
     e->song_count = song_count;
     e->format = format;
+    e->duration_seconds = this_duration;
     copy_bounded(e->author, sizeof(e->author), author);
     copy_bounded(e->title, sizeof(e->title), this_title);
     gui_playlist_entry_refresh_display(e);
   }
   free(data);
   return song_count;
+}
+
+/* MIG-0118: adds exactly ONE subsong (song_index) of `path` without
+ * expanding every other subsong the file may have - used by
+ * gui_playlist_load_ayl when reloading a `FormatSpec=N` line (a
+ * multi-song .ay entry this port's own .ayl writer produced, one line
+ * per subsong - see that function's own comment) instead of the full
+ * gui_playlist_add_file expansion every other add path uses. Mirrors
+ * gui_playlist_add_file's own per-song body (author probed once at
+ * song_index 0, matching Players.pas's OpenAYFile: AuthorString is
+ * file-wide, only SongName/Title varies per subsong) without its outer
+ * loop. Returns false if the file/song can't be loaded or song_index is
+ * out of range. */
+static bool add_single_song_entry(gui_playlist* pl, const char* path,
+                                   int song_index) {
+  FILE* f = fopen(path, "rb");
+  if (!f) return false;
+  if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+  long size = ftell(f);
+  if (size < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return false; }
+  uint8_t* data = (uint8_t*)malloc((size_t)size);
+  if (!data) { fclose(f); return false; }
+  size_t read = fread(data, 1, (size_t)size, f);
+  fclose(f);
+  if (read != (size_t)size) { free(data); return false; }
+
+  int song_count = 0;
+  char author[256], unused_title[256], comment[256];
+  player_format format;
+  double duration0;
+  if (!probe_song(data, read, path, 0, &song_count, author, unused_title,
+                   comment, &format, &duration0)) {
+    free(data);
+    return false;
+  }
+  if (song_index < 0 || song_index >= song_count) {
+    free(data);
+    return false;
+  }
+
+  char title[256];
+  double duration;
+  int unused_count;
+  char unused_author[256], unused_comment[256];
+  if (song_index == 0) {
+    strncpy(title, unused_title, sizeof(title) - 1);
+    title[sizeof(title) - 1] = '\0';
+    duration = duration0;
+  } else if (!probe_song(data, read, path, song_index, &unused_count,
+                          unused_author, title, unused_comment, NULL,
+                          &duration)) {
+    title[0] = '\0';
+    duration = 0.0;
+  }
+  free(data);
+
+  gui_playlist_entry* e = push_entry(pl);
+  if (!e) return false;
+  copy_bounded(e->path, sizeof(e->path), path);
+  e->song_index = song_index;
+  e->song_count = song_count;
+  e->format = format;
+  e->duration_seconds = duration;
+  copy_bounded(e->author, sizeof(e->author), author);
+  copy_bounded(e->title, sizeof(e->title), title);
+  gui_playlist_entry_refresh_display(e);
+  return true;
 }
 
 int gui_playlist_add_directory(gui_playlist* pl, const char* dir_path,
@@ -490,6 +592,34 @@ static void resolve_relative(const char* base_dir, const char* rel, char* out,
   }
 }
 
+/* PlayList.pas:315-320, CheckPath (the real Lazarus/FPC Linux build's
+ * OWN backslash-to-forward-slash path-delimiter fixup, `{$IFNDEF
+ * Windows}`-guarded - real .ayl playlists are commonly authored/shared
+ * from the Windows build and carry Windows-style `\` separators, e.g.
+ * `..\..\Authors\Foo\bar.stc`). Tries the path AS GIVEN first
+ * (`if FileExists(path) then Exit`) - only rewrites backslashes if that
+ * fails, so a path that happens to already work (already uses `/`, or a
+ * filename that coincidentally contains a literal `\`) is left alone.
+ * gui_playlist_load_ayl calls this instead of resolve_relative directly
+ * at every path-line site (MIG-0112, found via a real .ayl file -
+ * test_corpus_76/Cmnd.ayl - that only loads correctly with this). */
+static void ayl_check_path(const char* base_dir, const char* raw, char* out,
+                            size_t cap) {
+  resolve_relative(base_dir, raw, out, cap);
+  FILE* probe = fopen(out, "rb");
+  if (probe) {
+    fclose(probe);
+    return;
+  }
+  char fixed[1024];
+  size_t oi = 0;
+  for (size_t i = 0; raw[i] && oi + 1 < sizeof(fixed); i++) {
+    fixed[oi++] = (raw[i] == '\\') ? '/' : raw[i];
+  }
+  fixed[oi] = '\0';
+  resolve_relative(base_dir, fixed, out, cap);
+}
+
 bool gui_playlist_save_m3u(const gui_playlist* pl, const char* path) {
   FILE* f = fopen(path, "w");
   if (!f) return false;
@@ -572,74 +702,153 @@ static bool ayl_readline(FILE* f, char* out, size_t cap) {
   return true;
 }
 
-bool gui_playlist_save_ayl(const gui_playlist* pl, const char* path) {
+/* Writes one `<...>` override block (Players.pas: SavePLItem's own
+ * token-writing half) for `ov`, using `title`/`author` as the already-
+ * resolved display fallbacks. `def` (may be NULL) is diffed against
+ * ChipType/ChannelsAllocation/ChipFrequency/PlayerFrequency exactly
+ * like SavePLItem:1635-1653's own `<> PLDef_X` guards - a field that
+ * matches `def` is OMITTED (see playlist.h's own comment on the
+ * ChannelsAllocation=-2 "same mode, different pan values" quirk this
+ * intentionally preserves). `format_spec` (0 = don't write) is the
+ * MIG-0118 subsong-index token, SavePLItem:1685-1692's own condition
+ * for FT.AY (the only format this port's song_count ever exceeds 1
+ * for). Returns true iff anything was written (i.e. whether the
+ * `<`/`>` wrapper was needed at all) - MIG-0112 factored this out of
+ * gui_playlist_save_ayl so the ts-pair block doesn't duplicate this
+ * ~40-line token list a second time. */
+static bool write_ayl_block(FILE* f, const gui_playlist_overrides* ov,
+                             const char* title, const char* author,
+                             const gui_playlist_defaults* def,
+                             int format_spec) {
+  bool open = false;
+  if (author[0]) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Author=%s\n", author);
+  }
+  if (title[0]) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Name=%s\n", title);
+  }
+  if (ov->program[0]) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Program=%s\n", ov->program);
+  }
+  if (ov->tracker[0]) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Tracker=%s\n", ov->tracker);
+  }
+  if (ov->computer[0]) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Computer=%s\n", ov->computer);
+  }
+  if (ov->date[0]) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Date=%s\n", ov->date);
+  }
+  if (ov->comment[0]) {
+    char enc[1024];
+    ayl_encode_comment(ov->comment, enc, sizeof(enc));
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Comment=%s\n", enc);
+  }
+  if (ov->has_chip_type &&
+      !(def && def->has_chip_type && def->chip_type == ov->chip_type)) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "ChipType=%s\n",
+            ov->chip_type == AY_CHIP_TYPE_AY ? "AY" : "YM");
+  }
+  if (ov->channel_mode != -1 &&
+      !(def && def->channel_mode == ov->channel_mode)) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    if (ov->channel_mode >= 0 && ov->channel_mode <= 6) {
+      fprintf(f, "ChannelsAllocation=%s\n",
+              AYL_CHAN_ALLOC[ov->channel_mode]);
+    } else {
+      fprintf(f, "ChannelsAllocation=%d,%d,%d,%d,%d,%d\n", ov->al, ov->ar,
+              ov->bl, ov->br, ov->cl, ov->cr);
+    }
+  }
+  if (ov->ay_freq != -1 && !(def && def->ay_freq == ov->ay_freq)) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "ChipFrequency=%d\n", ov->ay_freq);
+  }
+  if (ov->int_freq != -1 && !(def && def->int_freq == ov->int_freq)) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "PlayerFrequency=%d\n", ov->int_freq);
+  }
+  if (format_spec > 0) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "FormatSpec=%d\n", format_spec);
+  }
+  if (open) fprintf(f, ">\n");
+  return open;
+}
+
+/* PlayList.pas: SaveAYL:1711-1728's own leading PLDef block - the same
+ * 5-token subset write_ayl_block diffs per-item fields against, just
+ * unconditional here (PLDef has no "differs from itself" concept).
+ * No-op if `defaults` is NULL. */
+static void write_ayl_pldef_header(FILE* f, const gui_playlist_defaults* d) {
+  bool open = false;
+  if (!d) return;
+  if (d->number_of_channels > 0) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "Channels=%s\n", d->number_of_channels == 1 ? "Mono" : "Stereo");
+  }
+  if (d->channel_mode != -1) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    if (d->channel_mode >= 0 && d->channel_mode <= 6) {
+      fprintf(f, "ChannelsAllocation=%s\n", AYL_CHAN_ALLOC[d->channel_mode]);
+    } else {
+      fprintf(f, "ChannelsAllocation=%d,%d,%d,%d,%d,%d\n", d->al, d->ar,
+              d->bl, d->br, d->cl, d->cr);
+    }
+  }
+  if (d->ay_freq >= 0) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "ChipFrequency=%d\n", d->ay_freq);
+  }
+  if (d->int_freq >= 0) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "PlayerFrequency=%d\n", d->int_freq);
+  }
+  if (d->has_chip_type) {
+    if (!open) { fprintf(f, "<\n"); open = true; }
+    fprintf(f, "ChipType=%s\n", d->chip_type == AY_CHIP_TYPE_AY ? "AY" : "YM");
+  }
+  if (open) fprintf(f, ">\n");
+}
+
+bool gui_playlist_save_ayl(const gui_playlist* pl, const char* path,
+                            const gui_playlist_defaults* defaults) {
   FILE* f = fopen(path, "w");
   if (!f) return false;
   fprintf(f, "%s6\n", AYL_VERSION_STRING);
+  write_ayl_pldef_header(f, defaults);
 
   for (int i = 0; i < pl->count; i++) {
     const gui_playlist_entry* e = &pl->items[i];
-    if (e->song_index != 0) continue; /* see playlist.h's own comment */
     const gui_playlist_overrides* ov = &e->overrides;
     fprintf(f, "%s\n", e->path);
 
-    bool open = false;
     const char* title = ov->title[0] ? ov->title : e->title;
     const char* author = ov->author[0] ? ov->author : e->author;
-    if (author[0]) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "Author=%s\n", author);
+    write_ayl_block(f, ov, title, author, defaults, e->song_index);
+
+    /* MIG-0112: PlayList.pas's SaveAYL - `if ...Next<>nil then
+     * SavePLItem(...Next)` - a second `<...>` block for the ts-pair,
+     * with NO second path line (see gui_playlist_entry's own comment on
+     * why: the pair plays the SAME file, just its own override set).
+     * SavePLItem's own token-writing has no read-only-metadata fallback
+     * (that convention is this port's own gui_playlist_entry_refresh_
+     * display concern, not SavePLItem's), so the ts-pair block passes
+     * its title/author fields raw, not falling back to e->title/
+     * e->author the way the primary block above does. No FormatSpec
+     * here - see playlist.h's own comment on why. */
+    if (e->has_ts_pair) {
+      write_ayl_block(f, &e->ts_pair_overrides, e->ts_pair_overrides.title,
+                       e->ts_pair_overrides.author, defaults, 0);
     }
-    if (title[0]) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "Name=%s\n", title);
-    }
-    if (ov->program[0]) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "Program=%s\n", ov->program);
-    }
-    if (ov->tracker[0]) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "Tracker=%s\n", ov->tracker);
-    }
-    if (ov->computer[0]) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "Computer=%s\n", ov->computer);
-    }
-    if (ov->date[0]) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "Date=%s\n", ov->date);
-    }
-    if (ov->comment[0]) {
-      char enc[1024];
-      ayl_encode_comment(ov->comment, enc, sizeof(enc));
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "Comment=%s\n", enc);
-    }
-    if (ov->has_chip_type) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "ChipType=%s\n",
-              ov->chip_type == AY_CHIP_TYPE_AY ? "AY" : "YM");
-    }
-    if (ov->channel_mode != -1) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      if (ov->channel_mode >= 0 && ov->channel_mode <= 6) {
-        fprintf(f, "ChannelsAllocation=%s\n",
-                AYL_CHAN_ALLOC[ov->channel_mode]);
-      } else {
-        fprintf(f, "ChannelsAllocation=%d,%d,%d,%d,%d,%d\n", ov->al, ov->ar,
-                ov->bl, ov->br, ov->cl, ov->cr);
-      }
-    }
-    if (ov->ay_freq != -1) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "ChipFrequency=%d\n", ov->ay_freq);
-    }
-    if (ov->int_freq != -1) {
-      if (!open) { fprintf(f, "<\n"); open = true; }
-      fprintf(f, "PlayerFrequency=%d\n", ov->int_freq);
-    }
-    if (open) fprintf(f, ">\n");
   }
 
   fclose(f);
@@ -678,12 +887,13 @@ static int ayl_parse_chan_mode(const char* val, uint8_t* al, uint8_t* ar,
   return -1; /* unparseable - leave channel_mode unset */
 }
 
-/* A real, recognized token this port doesn't model (Channels/Offset/
- * Length/Address/Loop/Time/Original/Type/FormatSpec/ams_andsix) or
- * anything wholly unrecognized falls through every branch here and is
- * silently skipped rather than erroring, so a real .ayl file with
- * these tokens still loads (see playlist.h's own comment on this
- * subset). */
+/* A real, recognized token this port doesn't model (item-level
+ * Channels/Offset/Length/Address/Loop/Time/Original/Type/ams_andsix -
+ * FormatSpec IS modeled, but handled by the caller before this
+ * function is reached, see gui_playlist_load_ayl) or anything wholly
+ * unrecognized falls through every branch here and is silently skipped
+ * rather than erroring, so a real .ayl file with these tokens still
+ * loads (see playlist.h's own comment on this subset). */
 static void ayl_apply_token(gui_playlist_overrides* ov, const char* key,
                              const char* val) {
   if (strcmp(key, "Author") == 0) {
@@ -719,7 +929,39 @@ static void ayl_apply_token(gui_playlist_overrides* ov, const char* key,
   }
 }
 
-int gui_playlist_load_ayl(gui_playlist* pl, const char* path) {
+/* PlayList.pas: LoadAYL:1429-1463's own leading-PLDef-block token loop -
+ * the same 5-token subset write_ayl_pldef_header writes (ChipType/
+ * Channels/ChannelsAllocation/ChipFrequency/PlayerFrequency); any other
+ * token here is a real TokenError in the original (LoadAYL aborts the
+ * whole load), but this port takes the same lenient "skip and keep
+ * going" approach every per-item block already does rather than
+ * rejecting an otherwise-fine file over one stray PLDef token. */
+static void ayl_apply_pldef_token(gui_playlist_defaults* d, const char* key,
+                                   const char* val) {
+  if (strcmp(key, "ChipType") == 0) {
+    if (strcmp(val, "AY") == 0) {
+      d->has_chip_type = true;
+      d->chip_type = AY_CHIP_TYPE_AY;
+    } else if (strcmp(val, "YM") == 0) {
+      d->has_chip_type = true;
+      d->chip_type = AY_CHIP_TYPE_YM;
+    }
+  } else if (strcmp(key, "Channels") == 0) {
+    if (strcmp(val, "Mono") == 0) d->number_of_channels = 1;
+    else if (strcmp(val, "Stereo") == 0) d->number_of_channels = 2;
+  } else if (strcmp(key, "ChannelsAllocation") == 0) {
+    int m = ayl_parse_chan_mode(val, &d->al, &d->ar, &d->bl, &d->br, &d->cl,
+                                 &d->cr);
+    if (m != -1) d->channel_mode = m;
+  } else if (strcmp(key, "ChipFrequency") == 0) {
+    d->ay_freq = atoi(val);
+  } else if (strcmp(key, "PlayerFrequency") == 0) {
+    d->int_freq = atoi(val);
+  }
+}
+
+int gui_playlist_load_ayl(gui_playlist* pl, const char* path,
+                           gui_playlist_defaults* out_defaults) {
   FILE* f = fopen(path, "r");
   if (!f) return -1;
   char base_dir[1024];
@@ -739,11 +981,20 @@ int gui_playlist_load_ayl(gui_playlist* pl, const char* path) {
     return added_total;
   }
 
-  /* A leading PLDef global-defaults block, if present, is parsed and
-   * discarded (see playlist.h's own comment). */
+  /* A leading PLDef global-defaults block, if present, is parsed into
+   * *out_defaults (MIG-0118; left untouched if out_defaults is NULL -
+   * "caller doesn't care", the block is still skipped past correctly). */
   char tok[1024];
   if (strcmp(cur_buf, "<") == 0) {
-    while (ayl_readline(f, tok, sizeof(tok)) && strcmp(tok, ">") != 0) { }
+    gui_playlist_defaults pldef;
+    gui_playlist_defaults_init(&pldef);
+    while (ayl_readline(f, tok, sizeof(tok)) && strcmp(tok, ">") != 0) {
+      char key[32], val[900];
+      if (tok[0] && ayl_parse_token(tok, key, sizeof(key), val, sizeof(val))) {
+        ayl_apply_pldef_token(&pldef, key, val);
+      }
+    }
+    if (out_defaults) *out_defaults = pldef;
     if (!ayl_readline(f, cur_buf, sizeof(cur_buf))) {
       fclose(f);
       return added_total;
@@ -756,7 +1007,7 @@ int gui_playlist_load_ayl(gui_playlist* pl, const char* path) {
     if (!ayl_readline(f, next_buf, sizeof(next_buf))) {
       /* Last line in the file is a bare path with no block. */
       char resolved[1024];
-      resolve_relative(base_dir, cur_buf, resolved, sizeof(resolved));
+      ayl_check_path(base_dir, cur_buf, resolved, sizeof(resolved));
       added_total += gui_playlist_add_file(pl, resolved);
       break;
     }
@@ -765,47 +1016,84 @@ int gui_playlist_load_ayl(gui_playlist* pl, const char* path) {
       /* `cur_buf` is a bare path (no block); `next_buf` becomes the
        * new current path candidate for the next iteration. */
       char resolved[1024];
-      resolve_relative(base_dir, cur_buf, resolved, sizeof(resolved));
+      ayl_check_path(base_dir, cur_buf, resolved, sizeof(resolved));
       added_total += gui_playlist_add_file(pl, resolved);
       memcpy(cur_buf, next_buf, sizeof(cur_buf));
       continue;
     }
 
-    /* `cur_buf` has a block - parse tokens until the closing '>'. */
+    /* `cur_buf` has a block - parse tokens until the closing '>'. A
+     * FormatSpec token (MIG-0118) is this port's own multi-song .ay
+     * subsong index, not a gui_playlist_overrides field - intercepted
+     * here before ayl_apply_token sees it. */
     gui_playlist_overrides ov;
     memset(&ov, 0, sizeof(ov));
     ov.channel_mode = -1;
     ov.ay_freq = -1;
     ov.int_freq = -1;
+    int format_spec = -1;
     while (ayl_readline(f, tok, sizeof(tok)) && strcmp(tok, ">") != 0) {
       char key[32], val[900];
       if (tok[0] && ayl_parse_token(tok, key, sizeof(key), val, sizeof(val))) {
-        ayl_apply_token(&ov, key, val);
+        if (strcmp(key, "FormatSpec") == 0) {
+          format_spec = atoi(val);
+        } else {
+          ayl_apply_token(&ov, key, val);
+        }
       }
     }
 
     char resolved[1024];
-    resolve_relative(base_dir, cur_buf, resolved, sizeof(resolved));
+    ayl_check_path(base_dir, cur_buf, resolved, sizeof(resolved));
     int before = pl->count;
-    int added = gui_playlist_add_file(pl, resolved);
+    /* PlayList.pas: a path line WITH a `<...>` block always goes through
+     * LoadPLItem+AddPlaylistItem - a single-entry add using FormatSpec
+     * (defaulting to 0 if absent) directly as the subsong index, NEVER
+     * the full-file subsong expansion Add_Songs_From_File/gui_playlist_
+     * add_file does (that's reserved for a BARE path line with no block
+     * at all - CheckAndAddFromPLFile's own path, matched above). Using
+     * gui_playlist_add_file here unconditionally was the MIG-0118 bug:
+     * a multi-song .ay's own song-0 line (no FormatSpec, since 0 is
+     * never written) would silently re-expand ALL subsongs on top of
+     * the ones each subsequent FormatSpec=N line adds individually. */
+    int added = add_single_song_entry(pl, resolved,
+                                       format_spec > 0 ? format_spec : 0)
+                    ? 1
+                    : 0;
     added_total += added;
     if (added > 0) {
-      /* Applied to just the first (song_index 0) entry added - see
-       * playlist.h's own comment on multi-song .ayl round-tripping. */
       pl->items[before].overrides = ov;
       gui_playlist_entry_refresh_display(&pl->items[before]);
     }
 
-    /* Read the path line for the NEXT item. A second immediate '<'
-     * here would be a "ts" Next-linked subitem (not supported - see
-     * playlist.h's own comment): its block is parsed-and-discarded,
-     * then the real next path line is read after it. */
+    /* Read the path line for the NEXT item. A second immediate '<' here
+     * is a "ts" Next-linked subitem (MIG-0112) - PlayList.pas's
+     * LoadPLItem reuses the SAME path (String1 := PLItemWork.FileName)
+     * rather than reading a new one, so this block's own tokens are
+     * parsed into gui_playlist_entry::ts_pair_overrides on the entry
+     * just added, not attached to any new playlist row - see
+     * gui_playlist_entry's own comment for the full trace. */
     if (!ayl_readline(f, cur_buf, sizeof(cur_buf))) {
       have_cur = false;
       break;
     }
     if (strcmp(cur_buf, "<") == 0) {
-      while (ayl_readline(f, tok, sizeof(tok)) && strcmp(tok, ">") != 0) { }
+      gui_playlist_overrides ts_ov;
+      memset(&ts_ov, 0, sizeof(ts_ov));
+      ts_ov.channel_mode = -1;
+      ts_ov.ay_freq = -1;
+      ts_ov.int_freq = -1;
+      while (ayl_readline(f, tok, sizeof(tok)) && strcmp(tok, ">") != 0) {
+        char key[32], val[900];
+        if (tok[0] && ayl_parse_token(tok, key, sizeof(key), val, sizeof(val))) {
+          ayl_apply_token(&ts_ov, key, val);
+        }
+      }
+      if (added > 0) {
+        pl->items[before].has_ts_pair = true;
+        pl->items[before].ts_pair_overrides = ts_ov;
+        gui_playlist_entry_refresh_display(&pl->items[before]);
+      }
       if (!ayl_readline(f, cur_buf, sizeof(cur_buf))) {
         have_cur = false;
         break;

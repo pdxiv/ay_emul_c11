@@ -43,6 +43,15 @@ int main(int argc, char** argv) {
 
   gtk_main();
 
+  /* Part B: MainWin.pas: SaveParams's window-geometry/tray-mode/volume
+   * subset - called here, between gtk_main() returning and
+   * gui_mainwin_destroy below, while every window (main + playlist/
+   * mixer/tools) is still alive/realized so gtk_window_get_position/
+   * get_size are meaningful - see gui_mainwin_save_settings's own
+   * mainwin.h comment for why this can't live inside gui_mainwin_destroy
+   * itself. */
+  gui_mainwin_save_settings(&mw);
+
   gui_ipc_shutdown();
   gui_mainwin_destroy(&mw);
   return 0;

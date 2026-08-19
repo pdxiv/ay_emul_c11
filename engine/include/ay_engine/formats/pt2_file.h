@@ -68,6 +68,38 @@ typedef struct pt2_file {
   uint32_t position_list_offset;
   int64_t global_tick_counter;
 
+  int64_t global_tick_max; /* GetTimePT2's `Tm` output (Players.pas:
+                            * 15216-15331) - computed by pt2_file_load via
+                            * a faithful port of GetTimePT2, a pattern-
+                            * opcode-only simulation (no audio synthesis)
+                            * that walks the position list exactly once.
+                            * 0 if the file's structure is degenerate
+                            * enough that Pascal's own GetTimePT2 would
+                            * RaiseBadFileStructure. */
+  int64_t loop_tick;       /* GetTimePT2's `Lp` output - the tick at which
+                            * PT2_LoopPosition is reached. */
+  bool do_loop;      /* MIG-0108: Players.pas: Do_Loop - see pt3_file.h's
+                       * own fields for the shape this follows. */
+  bool force_loop;   /* MIG-0114: Players.pas: Force_Loop (Tools.pas's
+                       * CBForceLoop checkbox) - lets THIS voice keep
+                       * generating registers (and so keep audibly
+                       * looping its own pattern data) past its own
+                       * natural end instead of freezing on its last
+                       * frame's frozen register values, so a shorter
+                       * voice in a mismatched-length Turbosound pair
+                       * doesn't just go silent/frozen while the longer
+                       * voice keeps playing - see <fmt>_file_step_
+                       * registers's own CheckLoopAndStop-equivalent
+                       * logic (Players.pas:8730-8746) for the exact
+                       * semantics. Distinct from do_loop (which makes
+                       * the WHOLE song loop, never setting real_end_
+                       * all at all) - force_loop still marks real_
+                       * end_all true, it just doesn't stop register
+                       * generation once that happens. */
+  bool real_end_all; /* MIG-0108: Players.pas: Real_End_All, set by
+                       * CheckLoopAndStop once global_tick_counter
+                       * reaches global_tick_max with do_loop false. */
+
   /* Raw (untranscoded CP1251), space-trimmed module title - Players.pas:
    * "else if FType = FT.PT2" (7394-7402): a fixed 30-byte field at file
    * offset 101 - added for the Phase 5 GUI, MIG-0082. */
@@ -80,4 +112,12 @@ pt2_file_status pt2_file_load(pt2_file* f, const uint8_t* data, size_t size,
 #define PT2_FILE_INTERRUPT_FREQ_DEF 50000
 #define PT2_FILE_SAMPLE_RATE_DEF 48000
 int pt2_file_make_buffer(pt2_file* f, int16_t* buf, int buffer_length);
+
+/* MIG-0112: advances one interrupt frame's worth of registers into
+ * `chip` (any ay_chip, not necessarily f->ay.chip - see pt2_file.c's own
+ * comment) and returns false once this format's own natural end is
+ * reached. The building block engine/player.c's playlist-Turbosound-
+ * pairing driver (player_step_registers) uses; pt2_file_make_buffer
+ * itself now just calls this with &f->ay.chip for standalone playback. */
+bool pt2_file_step_registers(pt2_file* f, ay_chip* chip);
 #endif

@@ -147,4 +147,15 @@ void ym_file_free(ym_file* f);
  * sample frames are written or the song ends (f->real_end_all). */
 int ym_file_make_buffer(ym_file* f, int16_t* buf, int buffer_length);
 
+/* MIG-0010 update: the register-generation half of ym_file_make_buffer's
+ * own inner loop body (the YM5i_Get_Registers/YM6i_Get_Registers +
+ * YM6_Extra_GetRegisters calls), WITHOUT the audio-synthesis call - a
+ * real .ym file's own All_GetRegisters[0] entry drives exactly this
+ * same dispatch (Players.pas:2760-2868's FT.YM5/YM6/YM2/YM3 branches),
+ * reached by Convs.pas's VBL2PSG/VBL2VTX generic "else" branch like
+ * every other non-FT.OUT/FT.ZXAY/FT.EPSG format. Returns true if a real
+ * frame was generated, false once real_end_all is set (an idempotent
+ * no-op after that point). */
+bool ym_file_step_registers(ym_file* f);
+
 #endif /* AY_ENGINE_YM_FILE_H */

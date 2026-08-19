@@ -285,29 +285,67 @@ static pt3_time_step_result pt3_time_channel_step(const uint8_t* d,
  * increments it once per interrupt frame, and a row's note-skip
  * counters gate how many frames elapse before the next row - the sum
  * of Delay values across all rows equals the total frame count).
- * TSMode (turbosound - the original's `vars[1]`/second-chip half) is
- * not simulated, matching this port's existing single-chip PT3 scope
- * (MIG-0007) - equivalent to the original's own `TS = $20` case, so
- * only the chip-0 (`vars[0]`) logic is transcribed. On a malformed
- * file (a bounds violation, or a pathologically long position tripping
- * the same 65536-row DLCatcher safety net the original has), returns
- * 0/0 rather than raising - this port's `pt3_file_load` already
- * succeeded by the time this runs (a well-formed-enough file for the
- * real player to interpret), so a duration-precompute failure degrades
- * to "no known duration" (seeking/natural-end unavailable) rather than
- * failing the whole load, unlike the original's own
+ *
+ * MIG-0109: now also walks voice[1]'s own pattern data (GetTimePT3's
+ * `vars[1]`) whenever the caller has already determined ts_mode/ts_byte
+ * (pt3_file_load computes these before calling this), matching the
+ * original's own `if TS <> $20 then ...` gating exactly (Players.pas:
+ * 15613-15662) - `TS` there is re-derived from the same file bytes this
+ * port's own ts_byte already holds, so passing it in rather than
+ * re-reading PT3_MusicName[13]/[98] here is behaviorally identical.
+ * Per-row, the walk stops (moves to the next position) as soon as EITHER
+ * voice's channel A hits an end-of-pattern marker (`if not PatInt(0) then
+ * break; if TS<>$20 then if not PatInt(1) then break;`) - i.e. the
+ * computed duration reflects whichever voice's pattern data is SHORTER
+ * within each position, not just voice 0's alone. On a malformed file (a
+ * bounds violation, or a pathologically long position tripping the same
+ * 65536-row DLCatcher safety net the original has), returns 0/0 rather
+ * than raising - this port's `pt3_file_load` already succeeded by the
+ * time this runs (a well-formed-enough file for the real player to
+ * interpret), so a duration-precompute failure degrades to "no known
+ * duration" (seeking/natural-end unavailable) rather than failing the
+ * whole load, unlike the original's own
  * RaiseBadFileStructure->Error=ErBadFileStructure. */
-static void pt3_get_time(const pt3_file* f, int64_t* out_tm,
-                          int64_t* out_lp) {
+static void pt3_get_time(const pt3_file* f, bool ts_active, uint8_t ts_byte,
+                          int64_t* out_tm, int64_t* out_lp) {
   const uint8_t* d = f->data;
   int64_t tm = 0, lp = 0;
-  int b = f->delay;
+  /* GetTimePT3 reads `b := PT3_Delay` directly - the fixed HEADER byte,
+   * not any voice's own runtime-mutable Delay (no voice/session state
+   * exists yet at this point in pt3_file_load). */
+  int b = f->data[100];
   int pos;
+  /* Players.pas:15623-15629: `for i := 0 to 1 do with vars[i] do begin
+   * a11 := 1; a22 := 1; a33 := 1; ... end` runs ONCE, before the position
+   * loop below, for BOTH voices - a11/a22/a33 (each channel's current
+   * note-length "step size", last set by opcode $B1 and otherwise carried
+   * forward from whichever note most recently set it) are NOT part of
+   * the per-position reset (`with vars[0] do begin a1:=1;a2:=1;a3:=1;
+   * end` only touches a1/a2/a3, the row countdown). Declaring a11/a22/a33
+   * here, outside the position loop, matches that: a position that
+   * doesn't immediately re-issue $B1 on its first note correctly
+   * inherits the previous position's step size instead of always
+   * restarting at 1. (a11b/a22b/a33b, voice 1's own copies, already had
+   * this right.) */
+  int a11 = 1, a22 = 1, a33 = 1;
+  int a1b = 1, a2b = 1, a3b = 1, a11b = 1, a22b = 1, a33b = 1;
+  /* Players.pas:15615: `DLCatcher: integer` is a single scalar declared
+   * in GetTimePT3's own var block, initialized ONCE (in the same
+   * once-only `for i := 0 to 1 do with vars[i] do DLCatcher := 256*256`
+   * loop above - `with vars[i]` doesn't actually reach DLCatcher, since
+   * it isn't a field of vars[i]'s record type, so that statement just
+   * assigns the outer DLCatcher twice) and never reset again - it's a
+   * safety budget spanning the WHOLE song's total row count, not a
+   * per-position allowance. Resetting it every position (as this port
+   * previously did) silently grants far more budget than the original
+   * ever would, so a pathological file that should trip Pascal's
+   * RaiseBadFileStructure might never trip this port's equivalent. */
+  int dl_catcher = 256 * 256; /* max 256 patterns * 256 lines/pattern */
 
   for (pos = 0; pos < f->number_of_positions; pos++) {
-    int pat, a1 = 1, a2 = 1, a3 = 1, a11 = 1, a22 = 1, a33 = 1;
+    int pat, a1 = 1, a2 = 1, a3 = 1;
     uint32_t j1, j2, j3;
-    int dl_catcher = 256 * 256; /* max 256 patterns * 256 lines/pattern */
+    uint32_t j1b = 0, j2b = 0, j3b = 0;
 
     if (pos == f->loop_position) lp = tm;
 
@@ -315,6 +353,26 @@ static void pt3_get_time(const pt3_file* f, int64_t* out_tm,
     j1 = rd16(d, f->patterns_pointer + (uint32_t)pat * 2);
     j2 = rd16(d, f->patterns_pointer + (uint32_t)pat * 2 + 2);
     j3 = rd16(d, f->patterns_pointer + (uint32_t)pat * 2 + 4);
+
+    if (ts_active) {
+      /* Players.pas: GetPatPtrs(1, TS*3-3-PT3_PositionList[i]), which
+       * bounds-checks its `i` (`if (i<0) or (i>84*3) or (i mod 3<>0) then
+       * RaiseBadFileStructure`) - degrading to "no known duration" here
+       * instead, matching every other malformed-input path in this
+       * function. */
+      int pat_b = (int)ts_byte * 3 - 3 - pat;
+      if (pat_b < 0 || pat_b > 84 * 3 || pat_b % 3 != 0) {
+        *out_tm = 0;
+        *out_lp = 0;
+        return;
+      }
+      j1b = rd16(d, f->patterns_pointer + (uint32_t)pat_b * 2);
+      j2b = rd16(d, f->patterns_pointer + (uint32_t)pat_b * 2 + 2);
+      j3b = rd16(d, f->patterns_pointer + (uint32_t)pat_b * 2 + 4);
+      a1b = 1;
+      a2b = 1;
+      a3b = 1;
+    }
 
     for (;;) {
       pt3_time_step_result ra =
@@ -337,6 +395,29 @@ static void pt3_get_time(const pt3_file* f, int64_t* out_tm,
         *out_tm = 0;
         *out_lp = 0;
         return;
+      }
+
+      if (ts_active) {
+        pt3_time_step_result rb =
+            pt3_time_channel_step(d, &j1b, &a1b, &a11b, &b, true);
+        if (rb == PT3_TIME_STEP_ERROR) {
+          *out_tm = 0;
+          *out_lp = 0;
+          return;
+        }
+        if (rb == PT3_TIME_STEP_END_OF_POSITION) break;
+        if (pt3_time_channel_step(d, &j2b, &a2b, &a22b, &b, false) ==
+            PT3_TIME_STEP_ERROR) {
+          *out_tm = 0;
+          *out_lp = 0;
+          return;
+        }
+        if (pt3_time_channel_step(d, &j3b, &a3b, &a33b, &b, false) ==
+            PT3_TIME_STEP_ERROR) {
+          *out_tm = 0;
+          *out_lp = 0;
+          return;
+        }
       }
 
       tm += b;
@@ -367,7 +448,9 @@ pt3_file_status pt3_file_load(pt3_file* f, const uint8_t* data, size_t size,
 
   f->ton_table_id = f->data[99];
 
-  f->delay = f->data[100];
+  /* Header PT3_Delay byte (offset 100) - copied into each voice's own
+   * mutable v->delay during the per-voice init loop below (Players.pas:
+   * InitTrackerModule's `Delay := PT3_Delay;`), not stored flat here. */
   f->number_of_positions = f->data[101];
   f->loop_position = f->data[102];
   f->patterns_pointer = rd16(f->data, 103);
@@ -380,7 +463,25 @@ pt3_file_status pt3_file_load(pt3_file* f, const uint8_t* data, size_t size,
   f->version = 6;
   if (f->data[13] >= '0' && f->data[13] <= '9') f->version = f->data[13] - '0';
 
+  /* Players.pas: TrModLoaded (2643-2693) - `if (CurFileType = FT.PT3) and
+   * (PlConsts[0].Version >= 7) then begin TS := Ord(ZRAM.PT3_MusicName[98]);
+   * if TS <> $20 then TSMode := True; ...`. See pt3_file.h's own ts_byte
+   * comment for the file-offset-98 verification (MIG-0109). */
+  f->ts_byte = 0x20;
+  f->ts_mode = false;
+  if (f->version >= 7) {
+    f->ts_byte = f->data[98];
+    if (f->ts_byte != 0x20) f->ts_mode = true;
+  }
+
   ay_engine_init(&f->ay);
+  f->ay.ts_mode = f->ts_mode; /* AY.pas: TSMode, consumed by
+                               * ay_synthesizer_stereo16's mixer (MIG-0109) -
+                               * ay_engine_init memsets the whole engine, so
+                               * this must be (re)applied after it, not
+                               * before. ay_engine_reset_chip below always
+                               * resets chip2 too, regardless of ts_mode, so
+                               * it's in a clean state either way. */
   /* AY.pas: ChType's own declared global default is YM_Chip (AY.pas:151),
    * and PT3 never overrides it (only VTX's loader sets Chip_Type) - so
    * standalone PT3 playback uses the YM amplitude curve, matching
@@ -392,56 +493,88 @@ pt3_file_status pt3_file_load(pt3_file* f, const uint8_t* data, size_t size,
   ay_engine_calculate_level_tables(&f->ay);
   ay_engine_reset_chip(&f->ay, true);
 
-  /* Players.pas:3717-3806, InitTrackerModule's FT.PT3 branch. */
-  f->delay_counter = 1;
+  /* Players.pas:3717-3806, InitTrackerModule's FT.PT3 branch, run once for
+   * voice[0] and, when ts_mode, once more for voice[1] (Players.pas:4029-
+   * 4030's `InitTrackerModule(CurFileType,0); if TSMode then
+   * InitTrackerModule(CurFileType1,1);`) - voice_ts_byte is 0x20 for
+   * voice[0] (PLConsts[0].TS is unconditionally $20, TrModLoaded:2651) and
+   * f->ts_byte for voice[1] (PLConsts[1].TS := TS, only reached when
+   * ts_mode, TrModLoaded:2667). */
+  for (i = 0; i < (f->ts_mode ? 2 : 1); i++) {
+    pt3_voice* v = &f->voice[i];
+    uint8_t voice_ts_byte = (i == 0) ? 0x20 : f->ts_byte;
+    int pat0 = f->data[f->position_list_offset];
 
-  i = f->data[f->position_list_offset];
-  f->chan_a.address_in_pattern = rd16(f->data, f->patterns_pointer + (uint32_t)i * 2);
-  f->chan_b.address_in_pattern = rd16(f->data, f->patterns_pointer + (uint32_t)i * 2 + 2);
-  f->chan_c.address_in_pattern = rd16(f->data, f->patterns_pointer + (uint32_t)i * 2 + 4);
+    v->delay = f->data[100];
+    v->delay_counter = 1;
+    v->current_position = 0;
+    v->noise_base = 0;
+    v->add_to_noise = 0;
+    v->cur_env_slide = 0;
+    v->cur_env_delay = 0;
+    v->env_base = 0;
 
-  {
-    pt3_channel* a = &f->chan_a;
-    a->ornament_pointer = f->ornaments_pointers[0];
-    a->loop_ornament_position = f->data[a->ornament_pointer];
-    a->ornament_pointer++;
-    a->ornament_length = f->data[a->ornament_pointer];
-    a->ornament_pointer++;
-    a->sample_pointer = f->samples_pointers[1];
-    a->loop_sample_position = f->data[a->sample_pointer];
-    a->sample_pointer++;
-    a->sample_length = f->data[a->sample_pointer];
-    a->sample_pointer++;
-    a->volume = 15;
-    a->note_skip_counter = 1;
+    if (voice_ts_byte != 0x20) pat0 = (int)voice_ts_byte * 3 - 3 - pat0;
+    v->chan_a.address_in_pattern =
+        rd16(f->data, f->patterns_pointer + (uint32_t)pat0 * 2);
+    v->chan_b.address_in_pattern =
+        rd16(f->data, f->patterns_pointer + (uint32_t)pat0 * 2 + 2);
+    v->chan_c.address_in_pattern =
+        rd16(f->data, f->patterns_pointer + (uint32_t)pat0 * 2 + 4);
+
+    {
+      pt3_channel* a = &v->chan_a;
+      a->ornament_pointer = f->ornaments_pointers[0];
+      a->loop_ornament_position = f->data[a->ornament_pointer];
+      a->ornament_pointer++;
+      a->ornament_length = f->data[a->ornament_pointer];
+      a->ornament_pointer++;
+      a->sample_pointer = f->samples_pointers[1];
+      a->loop_sample_position = f->data[a->sample_pointer];
+      a->sample_pointer++;
+      a->sample_length = f->data[a->sample_pointer];
+      a->sample_pointer++;
+      a->volume = 15;
+      a->note_skip_counter = 1;
+    }
+    v->chan_b.ornament_pointer = v->chan_a.ornament_pointer;
+    v->chan_b.loop_ornament_position = v->chan_a.loop_ornament_position;
+    v->chan_b.ornament_length = v->chan_a.ornament_length;
+    v->chan_b.sample_pointer = v->chan_a.sample_pointer;
+    v->chan_b.loop_sample_position = v->chan_a.loop_sample_position;
+    v->chan_b.sample_length = v->chan_a.sample_length;
+    v->chan_b.volume = 15;
+    v->chan_b.note_skip_counter = 1;
+    v->chan_c.ornament_pointer = v->chan_a.ornament_pointer;
+    v->chan_c.loop_ornament_position = v->chan_a.loop_ornament_position;
+    v->chan_c.ornament_length = v->chan_a.ornament_length;
+    v->chan_c.sample_pointer = v->chan_a.sample_pointer;
+    v->chan_c.loop_sample_position = v->chan_a.loop_sample_position;
+    v->chan_c.sample_length = v->chan_a.sample_length;
+    v->chan_c.volume = 15;
+    v->chan_c.note_skip_counter = 1;
+
+    v->global_tick_counter = 0;
+    v->real_end = false;
   }
-  f->chan_b.ornament_pointer = f->chan_a.ornament_pointer;
-  f->chan_b.loop_ornament_position = f->chan_a.loop_ornament_position;
-  f->chan_b.ornament_length = f->chan_a.ornament_length;
-  f->chan_b.sample_pointer = f->chan_a.sample_pointer;
-  f->chan_b.loop_sample_position = f->chan_a.loop_sample_position;
-  f->chan_b.sample_length = f->chan_a.sample_length;
-  f->chan_b.volume = 15;
-  f->chan_b.note_skip_counter = 1;
-  f->chan_c.ornament_pointer = f->chan_a.ornament_pointer;
-  f->chan_c.loop_ornament_position = f->chan_a.loop_ornament_position;
-  f->chan_c.ornament_length = f->chan_a.ornament_length;
-  f->chan_c.sample_pointer = f->chan_a.sample_pointer;
-  f->chan_c.loop_sample_position = f->chan_a.loop_sample_position;
-  f->chan_c.sample_length = f->chan_a.sample_length;
-  f->chan_c.volume = 15;
-  f->chan_c.note_skip_counter = 1;
 
   f->global_tick_counter = 0;
   f->do_loop = false;
   f->real_end_all = false;
-  pt3_get_time(f, &f->global_tick_max, &f->loop_tick); /* MIG-0101 */
+  /* MIG-0101/MIG-0109 */
+  pt3_get_time(f, f->ts_mode, f->ts_byte, &f->global_tick_max, &f->loop_tick);
 
   return PT3_FILE_OK;
 }
 
-/* Players.pas:12324-12583, PatternInterpreter. */
-static void pattern_interpreter(pt3_file* f, pt3_channel* chan) {
+/* Players.pas:12324-12583, PatternInterpreter. `chip` is the AY chip this
+ * voice writes to (&f->ay.chip for voice 0, &f->ay.chip2 for voice 1,
+ * MIG-0109) and `v` is that same voice's own mutable state (f->voice[0]
+ * or f->voice[1]) - `f` itself is still needed for shared, header-derived
+ * config (f->ornaments_pointers etc) plus, for the Flag9 tempo-change
+ * effect below, both voices' state at once. */
+static void pattern_interpreter(pt3_file* f, ay_chip* chip, pt3_voice* v,
+                                 pt3_channel* chan) {
   bool quit = false;
   uint8_t flag9 = 0, flag8 = 0, flag5 = 0, flag4 = 0, flag3 = 0, flag2 = 0,
           flag1 = 0;
@@ -490,14 +623,14 @@ static void pattern_interpreter(pt3_file* f, pt3_channel* chan) {
       quit = true;
     } else if (op >= 0xB2) { /* 0xB2..0xBF */
       chan->envelope_enabled = true;
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, (uint8_t)(op - 0xB1));
+      ay_chip_set_ay_register_fast(chip, 13, (uint8_t)(op - 0xB1));
       chan->address_in_pattern++;
-      f->env_base = (int16_t)(((uint16_t)d[chan->address_in_pattern]) << 8);
+      v->env_base = (int16_t)(((uint16_t)d[chan->address_in_pattern]) << 8);
       chan->address_in_pattern++;
-      f->env_base = (int16_t)((uint16_t)f->env_base | d[chan->address_in_pattern]);
+      v->env_base = (int16_t)((uint16_t)v->env_base | d[chan->address_in_pattern]);
       chan->position_in_ornament = 0;
-      f->cur_env_slide = 0;
-      f->cur_env_delay = 0;
+      v->cur_env_slide = 0;
+      v->cur_env_delay = 0;
     } else if (op == 0xB1) {
       chan->address_in_pattern++;
       chan->number_of_notes_to_skip = d[chan->address_in_pattern];
@@ -525,19 +658,19 @@ static void pattern_interpreter(pt3_file* f, pt3_channel* chan) {
       chan->ornament_pointer++;
       chan->position_in_ornament = 0;
     } else if (op >= 0x20) { /* 0x20..0x3F */
-      f->noise_base = (uint8_t)(op - 0x20);
+      v->noise_base = (uint8_t)(op - 0x20);
     } else if (op >= 0x10) { /* 0x10..0x1F */
       if (op == 0x10) {
         chan->envelope_enabled = false;
       } else {
-        ay_chip_set_ay_register_fast(&f->ay.chip, 13, (uint8_t)(op - 0x10));
+        ay_chip_set_ay_register_fast(chip, 13, (uint8_t)(op - 0x10));
         chan->address_in_pattern++;
-        f->env_base = (int16_t)(((uint16_t)d[chan->address_in_pattern]) << 8);
+        v->env_base = (int16_t)(((uint16_t)d[chan->address_in_pattern]) << 8);
         chan->address_in_pattern++;
-        f->env_base = (int16_t)((uint16_t)f->env_base | d[chan->address_in_pattern]);
+        v->env_base = (int16_t)((uint16_t)v->env_base | d[chan->address_in_pattern]);
         chan->envelope_enabled = true;
-        f->cur_env_slide = 0;
-        f->cur_env_delay = 0;
+        v->cur_env_slide = 0;
+        v->cur_env_delay = 0;
       }
       chan->address_in_pattern++;
       chan->sample_pointer = f->samples_pointers[d[chan->address_in_pattern] / 2];
@@ -613,14 +746,32 @@ static void pattern_interpreter(pt3_file* f, pt3_channel* chan) {
       chan->ton_slide_count = 0;
       chan->current_ton_sliding = 0;
     } else if (counter == flag8) {
-      f->env_delay = (int8_t)d[chan->address_in_pattern];
-      f->cur_env_delay = f->env_delay;
+      v->env_delay = (int8_t)d[chan->address_in_pattern];
+      v->cur_env_delay = v->env_delay;
       chan->address_in_pattern++;
-      f->env_slide_add = (int16_t)rd16(d, chan->address_in_pattern);
+      v->env_slide_add = (int16_t)rd16(d, chan->address_in_pattern);
       chan->address_in_pattern += 2;
     } else if (counter == flag9) {
       uint8_t b = d[chan->address_in_pattern];
-      f->delay = b; /* TSMode paired-delay sync not ported - MIG-0007 */
+      v->delay = b;
+      if (f->ts_mode) {
+        /* Players.pas:12584-12594 - `if TSMode and (PLConsts[1].TS <>
+         * $20) then begin PlParams[0].PT3.Delay := b;
+         * PlParams[0].PT3.DelayCounter := b; PlParams[1].PT3.Delay := b;
+         * end;` - a tempo-change effect triggered from EITHER voice's own
+         * pattern data re-syncs BOTH voices' tempo when real TS pairing
+         * is active (PLConsts[1].TS <> $20 is exactly f->ts_mode here,
+         * since ts_mode is only ever true when ts_byte != $20 by
+         * construction). Note the asymmetry, faithfully reproduced: only
+         * voice 0's DelayCounter is forced to the new value; voice 1's
+         * own DelayCounter countdown is left alone regardless of which
+         * voice triggered this. MIG-0109 - previously flagged as
+         * unported debt (see this port's earlier "TSMode paired-delay
+         * sync not ported - MIG-0007" comment, now resolved). */
+        f->voice[0].delay = b;
+        f->voice[0].delay_counter = b;
+        f->voice[1].delay = b;
+      }
       chan->address_in_pattern++;
     }
     counter--;
@@ -629,8 +780,8 @@ static void pattern_interpreter(pt3_file* f, pt3_channel* chan) {
 }
 
 /* Players.pas:12589-12682, ChangeRegisters. */
-static void change_registers(pt3_file* f, pt3_channel* chan, uint8_t* temp_mixer,
-                              int8_t* add_to_env) {
+static void change_registers(pt3_file* f, pt3_voice* v, pt3_channel* chan,
+                              uint8_t* temp_mixer, int8_t* add_to_env) {
   uint8_t* d = f->data;
 
   if (chan->enabled) {
@@ -701,8 +852,8 @@ static void change_registers(pt3_file* f, pt3_channel* chan, uint8_t* temp_mixer
       if (b1 & 0x20) chan->current_envelope_sliding = (uint8_t)j2;
       *add_to_env = (int8_t)(*add_to_env + (int8_t)j2);
     } else {
-      f->add_to_noise = (uint8_t)((b0 >> 1) + chan->current_noise_sliding);
-      if (b1 & 0x20) chan->current_noise_sliding = f->add_to_noise;
+      v->add_to_noise = (uint8_t)((b0 >> 1) + chan->current_noise_sliding);
+      if (b1 & 0x20) chan->current_noise_sliding = v->add_to_noise;
     }
 
     *temp_mixer = (uint8_t)(((b1 >> 1) & 0x48) | *temp_mixer);
@@ -727,76 +878,149 @@ static void change_registers(pt3_file* f, pt3_channel* chan, uint8_t* temp_mixer
   }
 }
 
-/* Players.pas:12684-12766, PT3_Get_Registers's main body (CNum=0 only -
- * no Turbosound, see pt3_file.h). */
-static void pt3_get_registers(pt3_file* f) {
+/* Players.pas:12684-12766, PT3_Get_Registers's main body, parametrized by
+ * voice_idx (0 or 1) matching the original's own explicit CNum parameter
+ * (MIG-0109 - PT3_Get_Registers already took CNum throughout in the
+ * original; this port's earlier single-voice version had simply never
+ * been called with anything but CNum=0), PLUS an explicit `chip` target
+ * (MIG-0112) - normally f's own &f->ay.chip/chip2 (see
+ * pt3_get_registers_voice below, self-pairing's own entry point), but
+ * for playlist-level Turbosound pairing (a DIFFERENT player's shared
+ * engine's chip2) an external target is needed instead - matching
+ * player_step_registers' own ay_chip* generalization across every
+ * pairing-eligible format. voice_idx 1 is only ever driven by
+ * pt3_file_make_buffer when f->ts_mode is set (self-pairing); playlist
+ * pairing only ever drives voice 0 (see pt3_file_step_registers). */
+static void pt3_get_registers_into(pt3_file* f, int voice_idx, ay_chip* chip) {
+  pt3_voice* v = &f->voice[voice_idx];
   uint8_t temp_mixer = 0;
   int8_t add_to_env = 0;
 
-  f->delay_counter--;
-  if (f->delay_counter == 0) {
-    f->chan_a.note_skip_counter--;
-    if (f->chan_a.note_skip_counter == 0) {
-      if (f->data[f->chan_a.address_in_pattern] == 0) {
-        f->current_position++;
-        if (f->current_position == f->number_of_positions)
-          f->current_position = f->loop_position;
+  v->delay_counter--;
+  if (v->delay_counter == 0) {
+    v->chan_a.note_skip_counter--;
+    if (v->chan_a.note_skip_counter == 0) {
+      if (f->data[v->chan_a.address_in_pattern] == 0) {
+        v->current_position++;
+        if (v->current_position == f->number_of_positions)
+          v->current_position = f->loop_position;
         {
-          int i = f->data[f->position_list_offset + f->current_position];
-          f->chan_a.address_in_pattern =
+          /* Players.pas:12722-12723 - `i := PT3_PositionList[CurrentPosition];
+           * b := PLConsts[CNum].TS; if b <> $20 then i := b*3-3-i;` -
+           * voice 0's own PLConsts[0].TS is unconditionally $20 (never
+           * triggers), voice 1's is f->ts_byte (see pt3_file.h). */
+          int i = f->data[f->position_list_offset + v->current_position];
+          if (voice_idx == 1 && f->ts_mode)
+            i = (int)f->ts_byte * 3 - 3 - i;
+          v->chan_a.address_in_pattern =
               rd16(f->data, f->patterns_pointer + (uint32_t)i * 2);
-          f->chan_b.address_in_pattern =
+          v->chan_b.address_in_pattern =
               rd16(f->data, f->patterns_pointer + (uint32_t)i * 2 + 2);
-          f->chan_c.address_in_pattern =
+          v->chan_c.address_in_pattern =
               rd16(f->data, f->patterns_pointer + (uint32_t)i * 2 + 4);
-          f->noise_base = 0;
+          v->noise_base = 0;
         }
       }
-      pattern_interpreter(f, &f->chan_a);
+      pattern_interpreter(f, chip, v, &v->chan_a);
     }
-    f->chan_b.note_skip_counter--;
-    if (f->chan_b.note_skip_counter == 0) pattern_interpreter(f, &f->chan_b);
-    f->chan_c.note_skip_counter--;
-    if (f->chan_c.note_skip_counter == 0) pattern_interpreter(f, &f->chan_c);
-    f->delay_counter = f->delay;
+    v->chan_b.note_skip_counter--;
+    if (v->chan_b.note_skip_counter == 0)
+      pattern_interpreter(f, chip, v, &v->chan_b);
+    v->chan_c.note_skip_counter--;
+    if (v->chan_c.note_skip_counter == 0)
+      pattern_interpreter(f, chip, v, &v->chan_c);
+    v->delay_counter = v->delay;
   }
 
   add_to_env = 0;
   temp_mixer = 0;
-  change_registers(f, &f->chan_a, &temp_mixer, &add_to_env);
-  change_registers(f, &f->chan_b, &temp_mixer, &add_to_env);
-  change_registers(f, &f->chan_c, &temp_mixer, &add_to_env);
+  change_registers(f, v, &v->chan_a, &temp_mixer, &add_to_env);
+  change_registers(f, v, &v->chan_b, &temp_mixer, &add_to_env);
+  change_registers(f, v, &v->chan_c, &temp_mixer, &add_to_env);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 7, temp_mixer);
+  ay_chip_set_ay_register_fast(chip, 7, temp_mixer);
 
-  f->ay.chip.reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
-  f->ay.chip.reg[1] = (uint8_t)(f->chan_a.ton >> 8);
-  f->ay.chip.reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
-  f->ay.chip.reg[3] = (uint8_t)(f->chan_b.ton >> 8);
-  f->ay.chip.reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
-  f->ay.chip.reg[5] = (uint8_t)(f->chan_c.ton >> 8);
+  chip->reg[0] = (uint8_t)(v->chan_a.ton & 0xFF);
+  chip->reg[1] = (uint8_t)(v->chan_a.ton >> 8);
+  chip->reg[2] = (uint8_t)(v->chan_b.ton & 0xFF);
+  chip->reg[3] = (uint8_t)(v->chan_b.ton >> 8);
+  chip->reg[4] = (uint8_t)(v->chan_c.ton & 0xFF);
+  chip->reg[5] = (uint8_t)(v->chan_c.ton >> 8);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+  ay_chip_set_ay_register_fast(chip, 8, v->chan_a.amplitude);
+  ay_chip_set_ay_register_fast(chip, 9, v->chan_b.amplitude);
+  ay_chip_set_ay_register_fast(chip, 10, v->chan_c.amplitude);
 
-  f->ay.chip.reg[6] = (uint8_t)((f->noise_base + f->add_to_noise) & 31);
+  chip->reg[6] = (uint8_t)((v->noise_base + v->add_to_noise) & 31);
 
   {
-    int16_t env = (int16_t)(f->env_base + add_to_env + f->cur_env_slide);
-    f->ay.chip.reg[11] = (uint8_t)(env & 0xFF);
-    f->ay.chip.reg[12] = (uint8_t)((env >> 8) & 0xFF);
+    int16_t env = (int16_t)(v->env_base + add_to_env + v->cur_env_slide);
+    chip->reg[11] = (uint8_t)(env & 0xFF);
+    chip->reg[12] = (uint8_t)((env >> 8) & 0xFF);
   }
 
-  if (f->cur_env_delay > 0) {
-    f->cur_env_delay--;
-    if (f->cur_env_delay == 0) {
-      f->cur_env_delay = f->env_delay;
-      f->cur_env_slide = (int16_t)(f->cur_env_slide + f->env_slide_add);
+  if (v->cur_env_delay > 0) {
+    v->cur_env_delay--;
+    if (v->cur_env_delay == 0) {
+      v->cur_env_delay = v->env_delay;
+      v->cur_env_slide = (int16_t)(v->cur_env_slide + v->env_slide_add);
     }
   }
 
-  f->global_tick_counter++;
+  v->global_tick_counter++;
+}
+
+/* Thin wrapper matching pt3_get_registers_into's own pre-MIG-0112
+ * signature - self-pairing's two call sites (pt3_file_make_buffer)
+ * always target f's own chip/chip2 by voice index. */
+static void pt3_get_registers_voice(pt3_file* f, int voice_idx) {
+  ay_chip* chip = (voice_idx == 0) ? &f->ay.chip : &f->ay.chip2;
+  pt3_get_registers_into(f, voice_idx, chip);
+}
+
+/* Players.pas:8732-8746, CheckLoopAndStop(CNum) - returns true (matching
+ * the original's own `Exit(True)`) when this voice's tick budget has been
+ * reached and Do_Loop is off AND Force_Loop is off (MIG-0114), meaning
+ * pt3_get_registers_voice should be skipped entirely this frame; sets
+ * v->real_end permanently once the tick budget is reached regardless of
+ * Force_Loop (matching `if not Do_Loop then Real_End[CNum] := True`
+ * unconditionally within that branch). With Force_Loop on, global_tick_
+ * counter is clamped at global_tick_max (matching `if Do_Loop or
+ * Force_Loop then ...Counter := ...Max`) but register generation is NOT
+ * skipped (`if not Force_Loop then Exit(True)`), so this voice keeps
+ * audibly looping its own pattern data - the "keep playing a shorter
+ * TS-pair module" case - even though v->real_end is already true. */
+static bool pt3_check_loop_and_stop(pt3_voice* v, int64_t global_tick_max,
+                                     bool do_loop, bool force_loop) {
+  if (global_tick_max > 0 && v->global_tick_counter >= global_tick_max) {
+    if (do_loop || force_loop) {
+      v->global_tick_counter = global_tick_max;
+    }
+    if (!do_loop) {
+      v->real_end = true;
+      if (!force_loop) return true;
+    }
+  }
+  return false;
+}
+
+/* MIG-0112: playlist-level Turbosound pairing's entry point for PT3 -
+ * used when a PT3 file is one half of a playlist Next-chain pair
+ * (player_pair, player.c), as opposed to PT3's OWN self-pairing
+ * (f->ts_mode, MIG-0109, driven by pt3_file_make_buffer directly). Only
+ * ever drives voice 0 - player_pair_load_song already refuses to
+ * activate playlist pairing for a PT3 file that's already self-pairing
+ * (TrModLoaded's own `TSMode = False` guard, Players.pas:2643-2691), so
+ * a PT3 participating in a playlist pair never has its own f->ts_mode
+ * set, exactly like standalone single-chip PT3 playback. */
+bool pt3_file_step_registers(pt3_file* f, ay_chip* chip) {
+  if (pt3_check_loop_and_stop(&f->voice[0], f->global_tick_max, f->do_loop, f->force_loop)) {
+    f->real_end_all = true;
+    return false;
+  }
+  pt3_get_registers_into(f, 0, chip);
+  f->global_tick_counter = f->voice[0].global_tick_counter;
+  return true;
 }
 
 int pt3_file_make_buffer(pt3_file* f, int16_t* buf, int buffer_length) {
@@ -812,41 +1036,58 @@ int pt3_file_make_buffer(pt3_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   /* Players.pas:12283-12300 MakeBufferTracker's own buffer-boundary
    * cutoff handling, mirroring MakeBufferAY/MakeBufferYM5. */
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
-    /* Players.pas: PT3_Get_Registers's own first statement, `if
+    /* Players.pas: MakeBufferTracker's own body (12301-12317, MIG-0109) -
+     * `Real_End_All := True; All_GetRegisters[0](0); Real_End_All :=
+     * Real_End_All and Real_End[0]; if TSMode then begin
+     * All_GetRegisters[1](1); Real_End_All := Real_End_All and
+     * Real_End[1]; end; if not Real_End_All then SynthesizerZX50(Buf);` -
+     * each voice's own PT3_Get_Registers(CNum) starts with `if
      * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
-     * MIG-0101) - equivalent here since nothing else touches
-     * global_tick_counter between one pt3_get_registers call ending
-     * and the next one starting. Force_Loop (the original's TS-pair
-     * "continue playback of the shorter module" case) doesn't apply -
-     * TSMode isn't ported (MIG-0007), so only Do_Loop matters. */
-    if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
-      if (f->do_loop) {
-        f->global_tick_counter = f->global_tick_max;
-      } else {
-        f->real_end_all = true;
-        break;
-      }
+     * MIG-0101), reproduced here as pt3_check_loop_and_stop gating the
+     * pt3_get_registers_voice call rather than being its first statement
+     * - equivalent since nothing else touches global_tick_counter between
+     * one voice's call ending and the next starting. When ts_mode is set,
+     * BOTH voices' own natural-end condition is genuinely required (a
+     * real AND, not silently collapsed to voice 0's alone) - matching
+     * Real_End_All's own semantics exactly. */
+    bool real_end_all = true;
+    if (!pt3_check_loop_and_stop(&f->voice[0], f->global_tick_max, f->do_loop, f->force_loop))
+      pt3_get_registers_voice(f, 0);
+    real_end_all = real_end_all && f->voice[0].real_end;
+    if (f->ts_mode) {
+      if (!pt3_check_loop_and_stop(&f->voice[1], f->global_tick_max, f->do_loop, f->force_loop))
+        pt3_get_registers_voice(f, 1);
+      real_end_all = real_end_all && f->voice[1].real_end;
     }
-    pt3_get_registers(f);
+    /* player.c's own progress-display contract only ever reads voice 0's
+     * counter (see pt3_file.h's own comment on this field) - kept in
+     * sync here every iteration. */
+    f->global_tick_counter = f->voice[0].global_tick_counter;
+    if (real_end_all) {
+      f->real_end_all = true;
+      break;
+    }
     /* AY.pas:1075-1082 SynthesizerZX50. */
     if (!ay->int_flag) {
       ay->number_of_tiks = ay_tiks_in_interrupt << 32;
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   return ay->buf_len;
 }

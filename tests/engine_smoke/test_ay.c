@@ -266,6 +266,148 @@ static void test_tick_accumulator_partition_independence(void) {
          results[0]);
 }
 
+/* MIG-0110: regression tests for the visualizer's second-chip (Turbosound)
+ * slot. AY.pas:602-603's FillVis only captures VisPoints[..].R[1] `if
+ * TSMode` (at CAPTURE time); confirms ay_engine_fill_vis (driven here via
+ * a real ay_synthesizer_stereo16 pass, exactly like the production
+ * caller) reproduces that: chip and chip2 are programmed with distinct,
+ * recognizable register values, and r[1] should hold chip2's own values
+ * only when ts_mode was true while the buffer was rendered. */
+static void test_vis_dual_chip_capture(void) {
+  ay_engine e;
+  int16_t buf[512 * 2];
+
+  /* ts_mode == true: r[1] must reflect chip2, not chip or stale zeros. */
+  ay_engine_init(&e);
+  ay_chip_set_ay_register(&e.chip, 0, 64);   /* chip: TonA period 64 */
+  ay_chip_set_ay_register(&e.chip, 1, 0);
+  ay_chip_set_ay_register(&e.chip, 7, 0x3E); /* mixer: tone A only */
+  ay_chip_set_ay_register(&e.chip, 8, 15);   /* AmplitudeA = 15 */
+  ay_chip_set_ay_register(&e.chip2, 0, 200); /* chip2: a different TonA */
+  ay_chip_set_ay_register(&e.chip2, 1, 0);
+  ay_chip_set_ay_register(&e.chip2, 7, 0x3E);
+  ay_chip_set_ay_register(&e.chip2, 8, 10);  /* a different AmplitudeA */
+  e.ts_mode = true;
+  e.chip_type = AY_CHIP_TYPE_AY;
+  ay_engine_calculate_level_tables(&e);
+
+  /* sample_rate=4800/latency=1.0s -> vis_step=48, comfortably triggering
+   * several FillVis samples within one 512-sample buffer. */
+  ay_engine_init_vis(&e, 4800, 1.0);
+  assert(e.vis_pos_max > 0);
+
+  e.delay_in_tiks = 0x10000;
+  e.tik_re = e.delay_in_tiks;
+  e.number_of_tiks = ((int64_t)5000) << 32;
+  e.buf = buf;
+  e.buf_len = 0;
+  e.buffer_length = 512;
+  ay_synthesizer_stereo16(&e);
+
+  assert(e.mk_vis_pos > 0 && "expected FillVis to have run at least once");
+  assert(e.vis_points[0].r[0].tn_a == 64);
+  assert(e.vis_points[0].r[0].amp_a == 15);
+  assert(e.vis_points[0].r[1].tn_a == 200 &&
+         "chip2's own TonA must be captured into r[1] when ts_mode");
+  assert(e.vis_points[0].r[1].amp_a == 10);
+
+  /* ts_mode == false: r[1] must NOT be touched (stays zeroed by
+   * ay_engine_init), even though chip2 still holds the same programmed
+   * registers - matching AY.pas's `if TSMode then with ... R[1] ...`. */
+  ay_engine_init(&e);
+  ay_chip_set_ay_register(&e.chip, 0, 64);
+  ay_chip_set_ay_register(&e.chip, 1, 0);
+  ay_chip_set_ay_register(&e.chip, 7, 0x3E);
+  ay_chip_set_ay_register(&e.chip, 8, 15);
+  ay_chip_set_ay_register(&e.chip2, 0, 200);
+  ay_chip_set_ay_register(&e.chip2, 8, 10);
+  e.ts_mode = false;
+  e.chip_type = AY_CHIP_TYPE_AY;
+  ay_engine_calculate_level_tables(&e);
+  ay_engine_init_vis(&e, 4800, 1.0);
+
+  e.delay_in_tiks = 0x10000;
+  e.tik_re = e.delay_in_tiks;
+  e.number_of_tiks = ((int64_t)5000) << 32;
+  e.buf = buf;
+  e.buf_len = 0;
+  e.buffer_length = 512;
+  ay_synthesizer_stereo16(&e);
+
+  assert(e.mk_vis_pos > 0);
+  assert(e.vis_points[0].r[0].tn_a == 64);
+  assert(e.vis_points[0].r[1].tn_a == 0 &&
+         "r[1] must stay untouched when ts_mode is off at capture time");
+  assert(e.vis_points[0].r[1].amp_a == 0);
+
+  printf("test_vis_dual_chip_capture: OK\n");
+}
+
+/* AY.pas:5319-5325's `for i := 0 to 1 do ... if not TSMode then break` -
+ * whether r[1] gets processed by the lazy Calc transform is decided by
+ * ts_mode at GET time (ay_engine_get_vis_point's call site), not whatever
+ * ts_mode was when the point was captured - a real property of the
+ * original's own mutable-global-checked-lazily design (see ay_vis_point's
+ * own comment in ay.h), reproduced here directly without needing a full
+ * synthesis pass. */
+static void test_vis_calc_reads_ts_mode_at_get_time(void) {
+  ay_engine e;
+  memset(&e, 0, sizeof(e));
+
+  /* Two independent, freshly-raw points (Calc mutates in place, so a
+   * single point can only meaningfully be Calc'd once - two slots avoid
+   * reusing already-transformed data across the two get() calls below).
+   * Both r[0]/r[1] on each point: env_t=8 (sawtooth-envelope Calc
+   * branch, AY.pas:5325-5344's ampl/tone-period rewrite), amp_a bit4 set
+   * (envelope path), mix=0 (tone A enabled, active-low), tn_a<=3 so the
+   * branch that OVERWRITES tn_a (`t := EnvP*16`) actually fires - a
+   * distinct env_p per slot (2 vs 5) makes the post-Calc tn_a
+   * unmistakably per-slot (32 vs 80), not a coincidence of shared
+   * input. */
+  for (int pt = 0; pt < 2; pt++) {
+    e.vis_points[pt].r[0].env_t = 8;
+    e.vis_points[pt].r[0].env_p = 2;
+    e.vis_points[pt].r[0].amp_a = 16;
+    e.vis_points[pt].r[0].mix = 0;
+    e.vis_points[pt].r[0].tn_a = 1;
+
+    e.vis_points[pt].r[1].env_t = 8;
+    e.vis_points[pt].r[1].env_p = 5;
+    e.vis_points[pt].r[1].amp_a = 16;
+    e.vis_points[pt].r[1].mix = 0;
+    e.vis_points[pt].r[1].tn_a = 1;
+  }
+
+  e.vis_pos_max = 2;
+  e.vis_step = 1;
+  e.vis_tick_max = 2;
+
+  /* Point 0, read with ts_mode == false: only r[0] gets processed; r[1]
+   * must survive with its raw, unprocessed values. */
+  e.ts_mode = false;
+  const ay_vis_point* cp = ay_engine_get_vis_point(&e, 0);
+  assert(cp != NULL);
+  assert(cp->calc);
+  assert(cp->r[0].amp_a == 22 && cp->r[0].tn_a == 32); /* e_val-6=22, EnvP*16=32 */
+  assert(cp->r[1].tn_a == 1 && "r[1] must be left unprocessed when "
+                                "ts_mode is false at get-time");
+  assert(cp->r[1].amp_a == 16 && "r[1] must still hold its raw value");
+
+  /* Point 1 (fresh raw data), read with ts_mode == true - r[1] must now
+   * be processed too, using ITS OWN env_p (5, not r[0]'s 2), confirming
+   * chip 1's data genuinely drives the result. */
+  e.ts_mode = true;
+  cp = ay_engine_get_vis_point(&e, 1);
+  assert(cp != NULL);
+  assert(cp->calc);
+  assert(cp->r[0].amp_a == 22 && cp->r[0].tn_a == 32);
+  assert(cp->r[1].amp_a == 22 && cp->r[1].tn_a == 80 &&
+         "r[1] must be processed from its OWN registers (EnvP=5*16=80) "
+         "when ts_mode is true at get-time");
+
+  printf("test_vis_calc_reads_ts_mode_at_get_time: OK\n");
+}
+
 int main(void) {
   test_register_masking();
   test_envelope_dispatch();
@@ -273,6 +415,8 @@ int main(void) {
   test_end_to_end_tone_is_audible();
   test_8bit_output_is_audible();
   test_tick_accumulator_partition_independence();
+  test_vis_dual_chip_capture();
+  test_vis_calc_reads_ts_mode_at_get_time();
   printf("All ay smoke tests passed.\n");
   return 0;
 }

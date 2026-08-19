@@ -91,6 +91,135 @@ static int get_note_freq(const ftc_file* f, uint8_t j) {
   return ST_TABLE[j];
 }
 
+/* Players.pas:15769-15887, GetTimeFTC's shared per-channel opcode-walk
+ * (used for all of channels A/B/C - all three share the exact same
+ * opcode ranges: $30/$60..$CB and $40..$5F are the two terminal cases
+ * (the latter also sets the new note-skip count), $EE/$EF are 1-byte-
+ * payload no-ops, $31..$3E/$ED are 2-byte-payload no-ops, $F0..$FF reads
+ * a new shared delay byte `b`, anything else is a bare 1-byte no-op).
+ * `j` only ever increases, so the 65536-bound check below already caps
+ * this at <=65536 iterations without needing a separate guard counter
+ * (unlike PSC's ported get-time function, which has no such natural
+ * bound and needs one) - matches the task's own framing that FTC's
+ * outer note-walk already has Pascal's own DLCatcher bound, so no
+ * additional cap is needed here. Returns false on any bounds violation
+ * (caller must bail: Tm=Lp=0). */
+static bool ftc_time_channel_walk(const uint8_t* d, uint32_t* j, int* a,
+                                   uint8_t* b) {
+  for (;;) {
+    if (*j >= 65536) return false;
+    uint8_t op = d[*j];
+    if (op == 0x30 || (op >= 0x60 && op <= 0xCB)) {
+      *a = 0;
+      (*j)++;
+      return true;
+    } else if (op >= 0x40 && op <= 0x5F) {
+      *a = op - 0x40;
+      (*j)++;
+      return true;
+    } else if (op == 0xEE || op == 0xEF) {
+      (*j)++;
+    } else if ((op >= 0x31 && op <= 0x3E) || op == 0xED) {
+      *j += 2;
+    } else if (op >= 0xF0) {
+      (*j)++;
+      if (*j >= 65536) return false;
+      *b = d[*j];
+    }
+    (*j)++;
+  }
+}
+
+typedef enum {
+  FTC_TIME_STEP_CONTINUE,
+  FTC_TIME_STEP_END_OF_POSITION,
+  FTC_TIME_STEP_ERROR,
+} ftc_time_step_result;
+
+/* Channel A's own step: `Dec(a1); if a1<0 then begin if Index[j1]=255
+ * then break; <walk>; end;` - the `Index[j1]=255` end-of-position check
+ * only fires exactly when a1 counts down to trigger a new note lookup
+ * (matching pt3_get_time's own PatInt/check_end precedent: only channel
+ * A detects "no more pattern data" and signals the caller to stop the
+ * whole per-position tick loop). */
+static ftc_time_step_result ftc_time_step_a(const uint8_t* d, uint32_t* j,
+                                             int* a, uint8_t* b) {
+  (*a)--;
+  if (*a >= 0) return FTC_TIME_STEP_CONTINUE;
+  if (*j >= 65536) return FTC_TIME_STEP_ERROR;
+  if (d[*j] == 255) return FTC_TIME_STEP_END_OF_POSITION;
+  if (!ftc_time_channel_walk(d, j, a, b)) return FTC_TIME_STEP_ERROR;
+  return FTC_TIME_STEP_CONTINUE;
+}
+
+/* Channels B/C's own step: `Dec(a2); if a2<0 then <walk>;` - no
+ * end-of-position check (see ftc_time_step_a). */
+static ftc_time_step_result ftc_time_step_bc(const uint8_t* d, uint32_t* j,
+                                              int* a, uint8_t* b) {
+  (*a)--;
+  if (*a >= 0) return FTC_TIME_STEP_CONTINUE;
+  if (!ftc_time_channel_walk(d, j, a, b)) return FTC_TIME_STEP_ERROR;
+  return FTC_TIME_STEP_CONTINUE;
+}
+
+/* Players.pas:15769-15887, GetTimeFTC - computes the song's total
+ * duration and loop-point tick, walking the position list (at
+ * f->positions_offset, the same table FTC_Get_Registers's own position
+ * advance consumes at playback time) exactly once. The DLCatcher(256)-
+ * bounded inner loop matches Players.pas's own per-position note-walk
+ * safety net exactly (unlike PSC's ported get-time function, this one
+ * already had an explicit bound in the original, so nothing extra is
+ * added here beyond the bounds checks MIG-0103's safety note requires
+ * everywhere else). On a malformed file, returns 0/0 rather than
+ * raising, matching pt3_get_time's/psc_get_time's own precedent. */
+static void ftc_get_time(const ftc_file* f, int64_t* out_tm,
+                          int64_t* out_lp) {
+  const uint8_t* d = f->data;
+  int64_t tm = 0, lp = 0;
+  uint8_t b = f->delay;
+  int i = 0;
+
+  for (;;) {
+    uint32_t pos_addr = f->positions_offset + (uint32_t)i * 2;
+    uint8_t pattern;
+    uint32_t base;
+    uint32_t j1, j2, j3;
+    int a1 = 0, a2 = 0, a3 = 0;
+    int dl_catcher = 256;
+
+    if (pos_addr >= 65536) goto fail;
+    pattern = d[pos_addr];
+    if (pattern == 255) break;
+    if (i == f->data[70] /* FTC_Loop_Position */) lp = tm;
+
+    base = f->patterns_pointer + (uint32_t)pattern * 6;
+    if (base + 5 >= 65536) goto fail;
+    j1 = rd16(d, base);
+    j2 = rd16(d, base + 2);
+    j3 = rd16(d, base + 4);
+
+    i++;
+    if (i >= (65536 - 0xD4) / 2) goto fail;
+
+    for (;;) {
+      ftc_time_step_result ra = ftc_time_step_a(d, &j1, &a1, &b);
+      if (ra == FTC_TIME_STEP_ERROR) goto fail;
+      if (ra == FTC_TIME_STEP_END_OF_POSITION) break;
+      if (ftc_time_step_bc(d, &j2, &a2, &b) == FTC_TIME_STEP_ERROR) goto fail;
+      if (ftc_time_step_bc(d, &j3, &a3, &b) == FTC_TIME_STEP_ERROR) goto fail;
+      tm += b;
+      if (--dl_catcher < 0) goto fail;
+    }
+  }
+  *out_tm = tm;
+  *out_lp = lp;
+  return;
+
+fail:
+  *out_tm = 0;
+  *out_lp = 0;
+}
+
 /* ModTypes variant 8 (Players.pas:151-162): FTC_MusicName[0..68]@0
  * FTC_Delay@69 FTC_Loop_Position@70 FTC_Slack(4B)@71
  * FTC_PatternsPointer@75 (word) FTC_Slack2[5]@77
@@ -158,6 +287,9 @@ ftc_file_status ftc_file_load(ftc_file* f, const uint8_t* data, size_t size,
   f->chan_c.volume = 15;
 
   f->global_tick_counter = 0;
+  f->do_loop = false;
+  f->real_end_all = false;
+  ftc_get_time(f, &f->global_tick_max, &f->loop_tick); /* MIG-0103 */
 
   return FTC_FILE_OK;
 }
@@ -278,7 +410,8 @@ static void pattern_interpreter(ftc_file* f, ftc_channel* chan, int chan_num) {
 }
 
 /* Players.pas:11006-11092, GetRegisters. */
-static void get_registers(ftc_file* f, ftc_channel* chan, uint8_t* temp_mixer) {
+static void get_registers(ftc_file* f, ay_chip* chip, ftc_channel* chan,
+                           uint8_t* temp_mixer) {
   uint8_t add_to_note, add_to_noise;
   uint8_t b;
   int j;
@@ -303,7 +436,7 @@ static void get_registers(ftc_file* f, ftc_channel* chan, uint8_t* temp_mixer) {
     j = (uint8_t)(chan->sample_noise_accumulator + b);
     if ((int8_t)b < 0) chan->sample_noise_accumulator = (uint8_t)j;
     if ((b & 64) == 0)
-      f->ay.chip.reg[6] = (uint8_t)((j + chan->noise + add_to_noise) & 31);
+      chip->reg[6] = (uint8_t)((j + chan->noise + add_to_noise) & 31);
     else
       *temp_mixer |= 64;
 
@@ -335,8 +468,8 @@ static void get_registers(ftc_file* f, ftc_channel* chan, uint8_t* temp_mixer) {
     if ((int8_t)b < 0) chan->envelope_accumulator = (uint16_t)k;
     if ((b & 64) && chan->envelope_enabled) {
       uint16_t env = (uint16_t)(chan->envelope - k);
-      f->ay.chip.reg[11] = (uint8_t)(env & 0xFF);
-      f->ay.chip.reg[12] = (uint8_t)(env >> 8);
+      chip->reg[11] = (uint8_t)(env & 0xFF);
+      chip->reg[12] = (uint8_t)(env >> 8);
       chan->amplitude = (uint8_t)(chan->amplitude | 16);
     }
 
@@ -366,9 +499,15 @@ static void get_registers(ftc_file* f, ftc_channel* chan, uint8_t* temp_mixer) {
   *temp_mixer >>= 1;
 }
 
-/* Players.pas:10845-11174, FTC_Get_Registers (minus CheckLoopAndStop -
- * matches this project's other tracker-format ports' own precedent). */
-static void ftc_get_registers(ftc_file* f) {
+/* Players.pas:10845-11174, FTC_Get_Registers. MIG-0108: the
+ * CheckLoopAndStop-equivalent check now lives in ftc_file_make_buffer's
+ * tick loop instead of here (see its own comment) - functionally
+ * equivalent since nothing else touches global_tick_counter in
+ * between. MIG-0112: `chip` is the target AY register file this frame's
+ * writes land in - `&f->ay.chip` for standalone/self playback, or an
+ * EXTERNAL chip (another player's ay_engine.chip2) when this format is
+ * playlist-paired as Turbosound's second voice. */
+static void ftc_get_registers(ftc_file* f, ay_chip* chip) {
   uint8_t temp_mixer;
 
   f->delay_counter--;
@@ -403,33 +542,63 @@ static void ftc_get_registers(ftc_file* f) {
   /* Players.pas:11144-11156: retrig imitation + "don't rewrite the same
    * envelope shape" hardware quirk avoidance. */
   if (f->retrig != 0) {
-    if (f->retrig == 1) f->ay.chip.ton_counter_a = 0xFFFE;
-    else if (f->retrig == 2) f->ay.chip.ton_counter_b = 0xFFFE;
-    else if (f->retrig == 3) f->ay.chip.ton_counter_c = 0xFFFE;
+    if (f->retrig == 1) chip->ton_counter_a = 0xFFFE;
+    else if (f->retrig == 2) chip->ton_counter_b = 0xFFFE;
+    else if (f->retrig == 3) chip->ton_counter_c = 0xFFFE;
   }
-  if (f->ay.chip.reg[13] != f->env_t || f->retrig != 0)
-    ay_chip_set_ay_register_fast(&f->ay.chip, 13, f->env_t);
+  if (chip->reg[13] != f->env_t || f->retrig != 0)
+    ay_chip_set_ay_register_fast(chip, 13, f->env_t);
   f->retrig = 0;
 
   temp_mixer = 0;
-  get_registers(f, &f->chan_a, &temp_mixer);
-  get_registers(f, &f->chan_b, &temp_mixer);
-  get_registers(f, &f->chan_c, &temp_mixer);
+  get_registers(f, chip, &f->chan_a, &temp_mixer);
+  get_registers(f, chip, &f->chan_b, &temp_mixer);
+  get_registers(f, chip, &f->chan_c, &temp_mixer);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 7, temp_mixer);
+  ay_chip_set_ay_register_fast(chip, 7, temp_mixer);
 
-  f->ay.chip.reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
-  f->ay.chip.reg[1] = (uint8_t)(f->chan_a.ton >> 8);
-  f->ay.chip.reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
-  f->ay.chip.reg[3] = (uint8_t)(f->chan_b.ton >> 8);
-  f->ay.chip.reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
-  f->ay.chip.reg[5] = (uint8_t)(f->chan_c.ton >> 8);
+  chip->reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
+  chip->reg[1] = (uint8_t)(f->chan_a.ton >> 8);
+  chip->reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
+  chip->reg[3] = (uint8_t)(f->chan_b.ton >> 8);
+  chip->reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
+  chip->reg[5] = (uint8_t)(f->chan_c.ton >> 8);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+  ay_chip_set_ay_register_fast(chip, 8, f->chan_a.amplitude);
+  ay_chip_set_ay_register_fast(chip, 9, f->chan_b.amplitude);
+  ay_chip_set_ay_register_fast(chip, 10, f->chan_c.amplitude);
 
   f->global_tick_counter++;
+}
+
+/* Players.pas:8732-8746, CheckLoopAndStop(CNum) + one ftc_get_registers
+ * call - the reusable "advance one interrupt frame's worth of registers
+ * into `chip`" building block MIG-0112's playlist-pairing driver needs
+ * (player_step_registers, player.c). Returns false once this format's
+ * own natural end is reached (mirrors Real_End[CNum] going true) - the
+ * caller (whether ftc_file_make_buffer below, standalone, or a pairing
+ * driver combining two formats) stops calling this once it returns
+ * false, exactly matching MakeBufferTracker's own `Real_End_All :=
+ * Real_End_All and Real_End[CNum]` accumulation. */
+bool ftc_file_step_registers(ftc_file* f, ay_chip* chip) {
+  /* Players.pas:8730-8746, CheckLoopAndStop(CNum) - Force_Loop
+   * (MIG-0114) lets register generation continue past the natural
+   * end (so a shorter Turbosound-paired voice keeps looping audibly)
+   * while still marking real_end_all true, matching `if Do_Loop or
+   * Force_Loop then ...Counter := ...Max; if not Do_Loop then begin
+   * Real_End[CNum] := True; if not Force_Loop then Exit(True); end;`
+   * exactly. */
+  if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop || f->force_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    }
+    if (!f->do_loop) {
+      f->real_end_all = true;
+      if (!f->force_loop) return false;
+    }
+  }
+  ftc_get_registers(f, chip);
+  return true;
 }
 
 int ftc_file_make_buffer(ftc_file* f, int16_t* buf, int buffer_length) {
@@ -442,23 +611,31 @@ int ftc_file_make_buffer(ftc_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
-    ftc_get_registers(f);
+    /* Players.pas: FTC_Get_Registers's own first statement, `if
+     * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
+     * MIG-0108/MIG-0112) - ftc_file_step_registers is the shared
+     * building block player_step_registers (player.c) also uses when
+     * this format is playlist-paired as Turbosound's second voice; here
+     * it targets this file's own private chip (standalone use). */
+    if (!ftc_file_step_registers(f, &f->ay.chip)) break;
     if (!ay->int_flag) {
       ay->number_of_tiks = ay_tiks_in_interrupt << 32;
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   return ay->buf_len;
 }

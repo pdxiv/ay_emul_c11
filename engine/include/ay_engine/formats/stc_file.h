@@ -54,6 +54,40 @@ typedef struct stc_file {
   uint16_t ornaments_pointer;
   uint16_t patterns_pointer;
   int64_t global_tick_counter;
+  int64_t global_tick_max; /* MIG-0101: computed by stc_file_load via a
+                            * faithful port of GetTimeSTC (Players.pas:
+                            * 15003-15040), a pattern-opcode-only
+                            * simulation (no audio synthesis) that walks
+                            * the position list exactly once. Unlike
+                            * GTR/PT3/PSM's GetTimeXXX, STC has no
+                            * loop-point (`Lp`) output, so no loop_tick
+                            * field is added here - see pt3_file.h's
+                            * loop_tick for the shape that formats WITH
+                            * a loop point get. 0 only if the file's
+                            * position/pattern data is structurally
+                            * degenerate - real files always get a real
+                            * value. */
+  bool do_loop;      /* MIG-0108: Players.pas: Do_Loop - see pt3_file.h's
+                       * own fields for the shape this follows. */
+  bool force_loop;   /* MIG-0114: Players.pas: Force_Loop (Tools.pas's
+                       * CBForceLoop checkbox) - lets THIS voice keep
+                       * generating registers (and so keep audibly
+                       * looping its own pattern data) past its own
+                       * natural end instead of freezing on its last
+                       * frame's frozen register values, so a shorter
+                       * voice in a mismatched-length Turbosound pair
+                       * doesn't just go silent/frozen while the longer
+                       * voice keeps playing - see <fmt>_file_step_
+                       * registers's own CheckLoopAndStop-equivalent
+                       * logic (Players.pas:8730-8746) for the exact
+                       * semantics. Distinct from do_loop (which makes
+                       * the WHOLE song loop, never setting real_end_
+                       * all at all) - force_loop still marks real_
+                       * end_all true, it just doesn't stop register
+                       * generation once that happens. */
+  bool real_end_all; /* MIG-0108: Players.pas: Real_End_All, set by
+                       * CheckLoopAndStop once global_tick_counter
+                       * reaches global_tick_max with do_loop false. */
 } stc_file;
 
 stc_file_status stc_file_load(stc_file* f, const uint8_t* data, size_t size,
@@ -62,4 +96,12 @@ stc_file_status stc_file_load(stc_file* f, const uint8_t* data, size_t size,
 #define STC_FILE_INTERRUPT_FREQ_DEF 50000
 #define STC_FILE_SAMPLE_RATE_DEF 48000
 int stc_file_make_buffer(stc_file* f, int16_t* buf, int buffer_length);
+
+/* MIG-0112: advances one interrupt frame's worth of registers into
+ * `chip` (any ay_chip, not necessarily f->ay.chip - see stc_file.c's own
+ * comment) and returns false once this format's own natural end is
+ * reached. The building block engine/player.c's playlist-Turbosound-
+ * pairing driver (player_step_registers) uses; stc_file_make_buffer
+ * itself now just calls this with &f->ay.chip for standalone playback. */
+bool stc_file_step_registers(stc_file* f, ay_chip* chip);
 #endif

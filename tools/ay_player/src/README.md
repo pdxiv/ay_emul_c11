@@ -1,53 +1,21 @@
 # tools/ay_player/src/
 
-Source for `ay_player`, a minimal CLI player/WAV exporter for the five
-chiptune formats `engine/libayengine.a` supports (AY/YM/PT3/SNDH/VTX). This
-is Phase 4 tool infrastructure built on top of the ported playback engine, not
-a port of a Pascal GUI window.
+Implementation of `ay_player`, a standalone headless CLI tool that loads one of the engine's supported chiptune formats and either plays it live or renders it to a WAV file. It is new platform/CLI glue built for this port, driving `engine/include/ay_engine/player.h`'s already-ported format loaders rather than reimplementing any format's own playback logic.
 
 ## alsa_output.c
 
-Implements the `alsa_output` API declared in `ay_player/alsa_output.h`:
-opens the "default" ALSA PCM device for interleaved S16_LE stereo output at a
-given sample rate, writes frames with one-shot `-EPIPE`/underrun recovery via
-`snd_pcm_prepare`/`snd_pcm_recover`, and drains/closes the device. Defines
-`_GNU_SOURCE` before any include (even its own headers) as a documented
-workaround for a `<alsa/asoundlib.h>` `struct timespec` redeclaration issue
-under strict `-std=c11`.
+Implements `alsa_output_open`/`alsa_output_write`/`alsa_output_close` directly against `<alsa/asoundlib.h>` (`-lasound`): opens the default PCM device, configures S16_LE/interleaved/stereo at the requested sample rate via `snd_pcm_set_params` (200ms target latency, resampling allowed), and recovers once from an `-EPIPE` underrun via `snd_pcm_prepare` before reporting an unrecoverable write error. `_GNU_SOURCE` is defined before any include to work around `<alsa/asoundlib.h>`'s `struct timespec` redeclaration under strict `-std=c11`.
 
-Not a port — new CLI/tool infrastructure, a thin wrapper directly over ALSA's
-`asoundlib.h`. Replaces the original's large hand-maintained `fpalsa` Pascal
-binding rather than porting it (see the file's own header comment and
-`ay_player/alsa_output.h`).
-
-## wav.c
-
-Implements the `wav_writer` API: builds a 44-byte little-endian RIFF/WAVE/fmt
-/data header, writes a placeholder copy on open, streams raw interleaved
-int16 PCM frames on write, and rewrites the header with the real data length
-on close.
-
-Ported from: `Convs.pas` — matches `Convs.pas:88-105`'s `TWaveFileHeader`
-layout field-for-field (`rId`/`rLen`/`wId`/`fId`/`fLen`/`wFormatTag`/
-`nChannels`/`nSamplesPerSec`/`nAvgBytesPerSec`/`nBlockAlign`/
-`FormatSpecific`/`dId`/`dLen`) and its seek-write-seek-rewrite pattern from
-`Convs.pas:525,551-555`, per the file's own header comment.
+Ported from: no Pascal equivalent — new Linux/ALSA output code (the original ay_emul used a Windows-only audio backend). See migration_debt_validated.yaml MIG-0025 (closed as validated: standard `snd_pcm_*` usage, graceful-failure path confirmed via a standalone invalid-device probe, real-time playback pacing confirmed via `time`).
 
 ## main.c
 
-CLI entry point: parses `<file> [--wav=<path>] [--seconds=N] [--frames=N]
-[--ignore-end]`, reads the input file, loads it via `engine`'s
-`player_load`, and either renders to a WAV file (`render_to_wav`, using
-`wav_writer`) or plays it live over ALSA (`play_via_alsa`, using
-`alsa_output`), pumping fixed-size buffers from `player_make_buffer` until
-the requested frame/second bound or the player's own natural end
-(`player_real_end_all`) is reached. `--ignore-end` sets `player_set_do_loop`
-so playback always renders the full requested length instead of stopping
-early, used for byte-for-byte oracle comparison tests.
+CLI entry point: parses `<file> [--wav=<path>] [--seconds=N] [--frames=N] [--ignore-end]`, reads the input file, calls `player_load` (engine/player.h) to detect and load one of AY/YM/PT3/SNDH/VTX/PT1/PT2/GTR/FLS/STC/STP/FXM/PSM/ASC/FTC/PSC/SQT, then drives a bounded render loop calling `player_make_buffer` and `player_real_end_all` in a `while` loop, writing each buffer either via `wav_writer_write` or `alsa_output_write`. `--ignore-end` sets `player_set_do_loop` so natural end-of-song never truncates the render, matching `OracleHarness.pas`'s sentinel-`Global_Tick_Max` comparison convention for regression tests.
 
-Not a port — new CLI/tool infrastructure (Phase 4 of
-`PORTING_TO_C11_LINUX.md`'s phased porting plan, per its own header comment).
-It drives the ported `engine` library (`ay_engine/player.h`) but has no
-single corresponding Pascal source file; it plays the same functional role as
-`MainWin.pas`'s playback-invocation logic, but as a headless CLI rather than
-a GUI window, so it is not treated as a port of that file.
+Ported from: ay_emul/Players.pas's format-dispatch and buffer-fill loop concept — the `InitForAllTypes`/`MakeBuffer` function-pointer dispatch and the `Real_End_All`/`Do_Loop` flags (e.g. Players.pas:8730-8793) that this loop's `player_load`/`player_make_buffer`/`player_real_end_all`/`player_set_do_loop` calls are built on, and the same bounded-loop shape ay_emul/Convs.pas's `WAV_Converter` uses (`repeat MakeBuffer(...) until May_Quit or Real_End_All`, Convs.pas:538-544). The format-detection/dispatch logic itself was ported once into `engine/include/ay_engine/player.h` and is only called here, not duplicated (migration_debt.yaml: "player API extended... promoted from tools/ay_player into engine/include/ay_engine/player.h"). The CLI argument parsing, file reading, and choice between WAV/ALSA output are new glue with no Pascal source (ay_emul had no CLI; equivalent choices were made via `FrmPLst`/menu GUI state). See migration_debt_validated.yaml MIG-0027 (closed as validated: format detection, load-failure handling, and end-to-end WAV rendering smoke-tested for all originally-supported formats).
+
+## wav.c
+
+Implements `wav_writer_open`/`wav_writer_write`/`wav_writer_close`: writes a 44-byte placeholder RIFF/WAVE/fmt /data header, streams raw interleaved PCM as it arrives, then seeks back and rewrites `rLen`/`dLen` with the real byte count once the frame count is known. All multi-byte fields are written explicitly little-endian regardless of host byte order.
+
+Ported from: ay_emul/Convs.pas (the `WaveFileHeader` record layout, Convs.pas:88-105, and `WAV_Converter`'s placeholder-header / seek-write-seek-rewrite pattern, Convs.pas:525,551-555). A real fidelity subtlety fixed during porting: each write must use the real per-call frame count the render loop produced (Pascal's `BuffLen`, i.e. `player_make_buffer`'s return value), not the buffer's fixed capacity, since the final call before end-of-song can be a partial buffer — matching `WAV_Converter`'s `BlockWrite(FileOut, WBuf, BuffLen * WaveFileHeader.nBlockAlign)` exactly. See migration_debt_validated.yaml MIG-0026 (closed as validated: byte-identical WAV output confirmed via `cmp` against the real `OracleHarness.pas` scenarios for AY/YM/PT3/VTX; SNDH WAV export remains excluded/incomplete, tracked under MIG-0021).

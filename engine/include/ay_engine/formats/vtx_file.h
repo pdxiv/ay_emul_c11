@@ -99,4 +99,13 @@ void vtx_file_free(vtx_file* f);
  * frames are written or the song ends (f->real_end_all). */
 int vtx_file_make_buffer(vtx_file* f, int16_t* buf, int buffer_length);
 
+/* MIG-0010 update: the register-generation half of vtx_file_make_
+ * buffer's own inner loop body (VTX_YM3_YM3b_Get_Registers +
+ * position_in_vtx loop-wraparound), WITHOUT the audio-synthesis call -
+ * reached by Convs.pas's VBL2PSG/VBL2VTX generic "else" branch like
+ * every other non-FT.OUT/FT.ZXAY/FT.EPSG format. Returns true if a real
+ * frame was generated, false once real_end_all is set (an idempotent
+ * no-op after that point). */
+bool vtx_file_step_registers(vtx_file* f);
+
 #endif /* AY_ENGINE_VTX_FILE_H */

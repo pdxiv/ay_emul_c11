@@ -27,11 +27,15 @@
  * see migration_debt.yaml MIG-0045 for what's confirmed vs still open).
  *
  * Ports:
- *  - sndh_UnpackFile's "not ICE-compressed" path only (sndh.pas:497-509):
- *    confirmed via the real test file (songs/sndh/Temple_of_Asherah.sndh)
- *    that it is NOT "ICE!"-compressed - the actual ICE depacker (sndh.pas:
- *    319-496, a hand-written LZ-style decompressor ported from 68000
- *    assembly) is NOT ported this milestone, see below.
+ *  - sndh_UnpackFile in full (sndh.pas:318-596), both branches: the plain
+ *    raw-copy path for a non-compressed file, AND (MIG-0016) the actual
+ *    "ICE!" depacker (sndh.pas:319-496, a hand-written LZ-style bitstream
+ *    decompressor ported from 68000 assembly - see sndh_ice_unpack's own
+ *    comment in sndh_file.c for the full port notes, including its one
+ *    genuinely-unvalidated sub-path). Real-file validation for the ICE
+ *    branch: test_corpus_76/megaintr.snd (a real, user-supplied
+ *    ICE-compressed SNDH file, "Mega Intro" by Paradox) - see
+ *    migration_debt.yaml MIG-0016.
  *  - sndh_ExtractTextInfo's tag scan (sndh.pas:598-835), narrowed to the
  *    tags that affect playback: VBL/TA/TB/TC/TD (PlayFreq - PlayGen itself
  *    is read but never acted on, matching the original's own comment at
@@ -64,10 +68,6 @@
  *    end AY-mixer-flush threshold.
  *
  * Deliberately not ported here (see migration_debt.yaml):
- *  - The ICE depacker itself (sndh.pas:319-496) - our real test file
- *    doesn't need it; a future ICE-compressed test file would need this
- *    ported (sndh_file_load fails loudly - SNDH_FILE_ERR_ICE_COMPRESSED -
- *    rather than silently misplaying).
  *  - Multi-song sub-tune selection beyond D0=CurrentSong (no per-song
  *    playtime lookup, no song-switching UI) - our real test file has
  *    exactly one song.
@@ -93,7 +93,15 @@
 typedef enum {
   SNDH_FILE_OK = 0,
   SNDH_FILE_ERR_BAD_HEADER,
-  SNDH_FILE_ERR_ICE_COMPRESSED, /* not ported - see sndh_file.h file comment */
+  /* MIG-0016: the "ICE!" magic was present but the depacker (see
+   * sndh_ice_unpack in sndh_file.c) found the header/stream corrupt or
+   * truncated - NOT "ICE-compressed files are unsupported" anymore
+   * (that used to be this status's meaning before MIG-0016 ported the
+   * real depacker; renamed from SNDH_FILE_ERR_ICE_COMPRESSED to make
+   * that clear). A well-formed ICE-compressed file now loads and plays
+   * normally, indistinguishable from an uncompressed one past this
+   * point. */
+  SNDH_FILE_ERR_ICE_CORRUPT,
   SNDH_FILE_ERR_TRUNCATED,
 } sndh_file_status;
 
@@ -110,6 +118,21 @@ typedef struct sndh_file {
                         * this rate (MIG-0100). */
 } sndh_file;
 
+/* MIG-0016: Pascal's sndh_UnpackFile, "ICE!"-compressed branch only
+ * (sndh.pas:319-496 depacker + 510-587 header/tail handling - the
+ * non-compressed branch is just a raw copy, handled inline by
+ * sndh_file_load itself rather than through this function). `data`/
+ * `size` is the WHOLE file starting at the "ICE!" magic (already
+ * confirmed present by the caller). On SNDH_FILE_OK, `*out_data` is a
+ * freshly malloc'd buffer of `*out_size` bytes - caller owns it (free()
+ * when done). Exposed (not static) specifically so tests/oracle_diff's
+ * dump_engine_state can call it directly and byte-compare its output
+ * against the real Pascal oracle without needing to run a full (slow -
+ * see migration_debt.yaml MIG-0021) Atari CPU emulation pass just to
+ * validate the depacker itself. */
+sndh_file_status sndh_ice_unpack(const uint8_t* data, size_t size,
+                                  uint8_t** out_data, size_t* out_size);
+
 /* Parses `data`/`size` (the whole .sndh file's bytes) and sets up
  * f->atari/f->ay for playback. `f` takes ownership of a freshly allocated
  * 68000 memory image; call sndh_file_free when done. Also parses the
@@ -119,9 +142,14 @@ typedef struct sndh_file {
  * Time := PlayFreq * 300` 5-minute fallback when the tag is absent/
  * zero) - MIG-0100, previously left effectively unbounded
  * (0x7FFFFFFF), which also silently disabled seek support (see
- * player_get_tick_position's own SNDH case). */
+ * player_get_tick_position's own SNDH case). is_ste (MIG-0121): true for
+ * an Atari STe (default, matches every caller's exact behavior before
+ * this parameter existed), false for a plain Atari ST, which has no
+ * DMA-sound hardware at all - see atari_emulate.h's own is_ste comment
+ * for the full atari.pas citation; mirrors asc_file_load's own is_asc0
+ * parameter precedent (a load-time format-variant flag). */
 sndh_file_status sndh_file_load(sndh_file* f, const uint8_t* data,
-                                 size_t size, int sample_rate);
+                                 size_t size, int sample_rate, bool is_ste);
 
 #define SNDH_FILE_SAMPLE_RATE_DEF 48000 /* settings.pas: SampleRateDef */
 
@@ -136,5 +164,36 @@ void sndh_file_free(sndh_file* f);
  * f->atari.tick_count_max/do_loop after loading, before the first
  * call. */
 int sndh_file_make_buffer(sndh_file* f, int16_t* buf, int buffer_length);
+
+/* MIG-0017 update: atari.pas's Atari_SeekTo (1684-1705), forward-seek
+ * branch only - unlike the generic decode-and-discard seek every other
+ * format uses (gui/src/playback.c's do_seek calling player_make_buffer
+ * repeatedly and throwing away its output), the original's own SNDH
+ * seek never calls Synthesizer/SynthesizerSNDH at all: it just drives
+ * Atari_Emulate (this port's atari_emulate_step) forward on its own,
+ * using DMASndSkipMC68000Takts to keep the DMA/digi-sample position
+ * roughly in sync without generating any audio. `target_tick` must be
+ * >= f->atari.tick_count (a backward seek needs a full reload instead,
+ * same as every other format - see player.c's player_seek_fast_forward,
+ * which enforces this before calling here). No-op if the song has
+ * already ended. See sndh_file.c's own definition for the exact
+ * mixer-reentrancy-safety mechanism and the DMA-catch-up caveat. */
+void sndh_file_seek_fast_forward(sndh_file* f, int64_t target_tick);
+
+/* MIG-0010 update: Players.pas's SNDH_Get_Registers (14094-14097),
+ * which is literally `Atari_Emulate_One_VBL` - see migration_debt.yaml
+ * MIG-0017's own correction of what that procedure actually is (SNDH's
+ * own All_GetRegisters[0] entry, reached by Convs.pas's VBL2PSG/VBL2VTX
+ * generic "else" branch like every other non-FT.OUT/FT.ZXAY/FT.EPSG
+ * format - NOT a seek-only function, that was this project's own
+ * earlier misreading, corrected once the real call graph was traced).
+ * Advances the 68000 CPU/timers forward by exactly ONE VBL tick with NO
+ * audio synthesis at all, reusing sndh_file_seek_fast_forward's own
+ * mixer-reentrancy-safety mechanism (buf=NULL neutralization + per-step
+ * pending-writes flush - see that function's own comment in sndh_
+ * file.c). Returns true if a real frame was generated, false once
+ * real_end_all is set (an idempotent no-op after that point, matching
+ * every other format's own step_registers contract). */
+bool sndh_file_step_registers(sndh_file* f);
 
 #endif /* AY_ENGINE_SNDH_FILE_H */

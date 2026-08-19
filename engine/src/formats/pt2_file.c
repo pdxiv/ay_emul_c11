@@ -56,6 +56,119 @@ static void copy_fixed_field(const uint8_t* src, size_t src_size,
   if (start > 0) memmove(out, out + start, n - start + 1);
 }
 
+/* Players.pas:15216-15331, GetTimePT2's per-channel opcode scan (the
+ * `repeat case Index[jN] of ... until False` block nested inside `if
+ * aN < 0 then`). `check_end` is true only for channel A: it alone
+ * detects "no more pattern data for this position" via a raw 0 byte
+ * (`if Index[j1] = 0 then break`) and signals the caller to stop the
+ * whole row-walk for THIS position (channels B/C have no such check in
+ * the original - only channel A's). PT2_TIME_STEP_ERROR signals either
+ * a malformed file that would push `*j` at or past the 65536-byte data
+ * buffer (Pascal's own `Index` array is one byte larger - 0..65536 -
+ * and this port's `data` buffer is exactly `[65536]`, so offset 65536
+ * itself must be rejected too, not silently tolerated the way Pascal's
+ * oversized static buffer happens to). `b` (shared tempo/delay byte) is
+ * mutated in place exactly as the original's closure over its own outer
+ * `b` variable does. */
+typedef enum {
+  PT2_TIME_STEP_CONTINUE,
+  PT2_TIME_STEP_END_OF_POSITION,
+  PT2_TIME_STEP_ERROR,
+} pt2_time_step_result;
+
+static pt2_time_step_result pt2_time_channel_step(const uint8_t* d, uint32_t* j,
+                                                    int* a, int* a1x, uint8_t* b,
+                                                    bool check_end) {
+  (*a)--;
+  if (*a >= 0) return PT2_TIME_STEP_CONTINUE;
+  if (*j >= 65536) return PT2_TIME_STEP_ERROR;
+  if (check_end && d[*j] == 0) return PT2_TIME_STEP_END_OF_POSITION;
+
+  for (;;) {
+    uint8_t op;
+    if (*j >= 65536) return PT2_TIME_STEP_ERROR;
+    op = d[*j];
+    if (op == 0x70 || (op >= 0x80 && op <= 0xE0)) {
+      *a = *a1x;
+      (*j)++;
+      return PT2_TIME_STEP_CONTINUE;
+    } else if (op >= 0x71 && op <= 0x7E) {
+      *j += 2;
+    } else if (op >= 0x20 && op <= 0x5F) {
+      *a1x = op - 0x20;
+    } else if (op == 0x0F) {
+      (*j)++;
+      if (*j >= 65536) return PT2_TIME_STEP_ERROR;
+      *b = d[*j];
+    } else if ((op >= 1 && op <= 0x0B) || op == 0x0E) {
+      (*j)++;
+    } else if (op == 0x0D) {
+      *j += 3;
+    }
+    (*j)++;
+  }
+}
+
+/* Players.pas:15216-15331, GetTimePT2 - computes the song's total
+ * duration and loop-point tick in the same "global tick" units
+ * global_tick_counter uses: it walks the known position list exactly
+ * once, summing each processed row's Delay value. On a malformed file
+ * (a bounds violation, or a pathologically long song tripping the same
+ * DLCatcher=16384 safety net the original has), returns 0/0 rather than
+ * raising - this port's `pt2_file_load` already succeeded by the time
+ * this runs, so a duration-precompute failure degrades to "no known
+ * duration" rather than failing the whole load, matching pt3_get_time's
+ * own precedent. */
+static void pt2_get_time(const pt2_file* f, int64_t* out_tm, int64_t* out_lp) {
+  const uint8_t* d = f->data;
+  int64_t tm = 0, lp = 0;
+  uint8_t b = f->delay;
+  int a1 = 0, a2 = 0, a3 = 0, a11 = 0, a22 = 0, a33 = 0;
+  int dl_catcher = 16384;
+  int i;
+
+  for (i = 0;; i++) {
+    uint32_t pl_addr, base, j1, j2, j3;
+    uint8_t posb;
+
+    if ((uint32_t)i >= 65536u - f->position_list_offset) goto fail;
+    pl_addr = f->position_list_offset + (uint32_t)i;
+    posb = d[pl_addr];
+    if ((int8_t)posb < 0) break;
+    if (i == f->loop_position) lp = tm;
+
+    base = f->patterns_pointer + (uint32_t)posb * 6;
+    j1 = rd16(d, base);
+    j2 = rd16(d, base + 2);
+    j3 = rd16(d, base + 4);
+
+    for (;;) {
+      pt2_time_step_result r1 =
+          pt2_time_channel_step(d, &j1, &a1, &a11, &b, true);
+      if (r1 == PT2_TIME_STEP_ERROR) goto fail;
+      if (r1 == PT2_TIME_STEP_END_OF_POSITION) break;
+
+      if (pt2_time_channel_step(d, &j2, &a2, &a22, &b, false) ==
+          PT2_TIME_STEP_ERROR)
+        goto fail;
+      if (pt2_time_channel_step(d, &j3, &a3, &a33, &b, false) ==
+          PT2_TIME_STEP_ERROR)
+        goto fail;
+
+      tm += b;
+      if (--dl_catcher < 0) goto fail;
+    }
+  }
+
+  *out_tm = tm;
+  *out_lp = lp;
+  return;
+
+fail:
+  *out_tm = 0;
+  *out_lp = 0;
+}
+
 /* ModTypes variant 5 (Players.pas:128-135): PT2_Delay@0
  * PT2_NumberOfPositions@1 PT2_LoopPosition@2
  * PT2_SamplesPointers[0..31]@3 (64B) PT2_OrnamentsPointers[0..15]@67
@@ -143,12 +256,15 @@ pt2_file_status pt2_file_load(pt2_file* f, const uint8_t* data, size_t size,
   }
 
   f->global_tick_counter = 0;
+  f->do_loop = false;
+  f->real_end_all = false;
+  pt2_get_time(f, &f->global_tick_max, &f->loop_tick);
 
   return PT2_FILE_OK;
 }
 
 /* Players.pas:9095-9210, PatternInterpreter. */
-static void pattern_interpreter(pt2_file* f, pt2_channel* chan) {
+static void pattern_interpreter(pt2_file* f, ay_chip* chip, pt2_channel* chan) {
   bool quit = false;
   bool gliss = false;
 
@@ -184,11 +300,11 @@ static void pattern_interpreter(pt2_file* f, pt2_channel* chan) {
       chan->envelope_enabled = false;
     } else if (op >= 0x71) { /* $71..$7E */
       chan->envelope_enabled = true;
-      ay_chip_set_ay_register_fast(&f->ay.chip, 13, (uint8_t)(op - 0x70));
+      ay_chip_set_ay_register_fast(chip, 13, (uint8_t)(op - 0x70));
       chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
-      f->ay.chip.reg[11] = rb(f->data, chan->address_in_pattern);
+      chip->reg[11] = rb(f->data, chan->address_in_pattern);
       chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
-      f->ay.chip.reg[12] = rb(f->data, chan->address_in_pattern);
+      chip->reg[12] = rb(f->data, chan->address_in_pattern);
     } else if (op == 0x70) {
       quit = true;
     } else if (op >= 0x60) { /* $60..$6F */
@@ -240,7 +356,8 @@ static void pattern_interpreter(pt2_file* f, pt2_channel* chan) {
 }
 
 /* Players.pas:9212-9259, GetRegisters. */
-static void get_registers(pt2_file* f, pt2_channel* chan, uint8_t* temp_mixer) {
+static void get_registers(pt2_file* f, ay_chip* chip, pt2_channel* chan,
+                           uint8_t* temp_mixer) {
   if (chan->enabled) {
     uint8_t b0 = rb(f->data, (uint32_t)chan->sample_pointer +
                                   (uint32_t)chan->position_in_sample * 3);
@@ -282,7 +399,7 @@ static void get_registers(pt2_file* f, pt2_channel* chan, uint8_t* temp_mixer) {
     if (b0 & 1) {
       *temp_mixer |= 64;
     } else {
-      f->ay.chip.reg[6] =
+      chip->reg[6] =
           (uint8_t)(((b0 >> 3) + (uint8_t)chan->addition_to_noise) & 31);
     }
     if (b0 & 2) *temp_mixer |= 8;
@@ -299,9 +416,15 @@ static void get_registers(pt2_file* f, pt2_channel* chan, uint8_t* temp_mixer) {
   *temp_mixer >>= 1;
 }
 
-/* Players.pas:9091-9323, PT2_Get_Registers (minus CheckLoopAndStop -
- * matches this project's other tracker-format ports' own precedent). */
-static void pt2_get_registers(pt2_file* f) {
+/* Players.pas:9091-9323, PT2_Get_Registers. MIG-0108: the
+ * CheckLoopAndStop-equivalent check now lives in pt2_file_make_buffer's
+ * tick loop instead of here (see its own comment) - functionally
+ * equivalent since nothing else touches global_tick_counter in
+ * between. MIG-0112: `chip` is the target AY register file this frame's
+ * writes land in - `&f->ay.chip` for standalone/self playback, or an
+ * EXTERNAL chip when this format is playlist-paired as Turbosound's
+ * second voice (see stc_file.c's own comment on this same shape). */
+static void pt2_get_registers(pt2_file* f, ay_chip* chip) {
   uint8_t temp_mixer;
 
   f->delay_counter--;
@@ -321,34 +444,60 @@ static void pt2_get_registers(pt2_file* f) {
           f->chan_c.address_in_pattern = rd16(f->data, base + 4);
         }
       }
-      pattern_interpreter(f, &f->chan_a);
+      pattern_interpreter(f, chip, &f->chan_a);
     }
     f->chan_b.note_skip_counter--;
-    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, &f->chan_b);
+    if (f->chan_b.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_b);
     f->chan_c.note_skip_counter--;
-    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, &f->chan_c);
+    if (f->chan_c.note_skip_counter < 0) pattern_interpreter(f, chip, &f->chan_c);
     f->delay_counter = f->delay;
   }
 
   temp_mixer = 0;
-  get_registers(f, &f->chan_a, &temp_mixer);
-  get_registers(f, &f->chan_b, &temp_mixer);
-  get_registers(f, &f->chan_c, &temp_mixer);
+  get_registers(f, chip, &f->chan_a, &temp_mixer);
+  get_registers(f, chip, &f->chan_b, &temp_mixer);
+  get_registers(f, chip, &f->chan_c, &temp_mixer);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 7, temp_mixer);
+  ay_chip_set_ay_register_fast(chip, 7, temp_mixer);
 
-  f->ay.chip.reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
-  f->ay.chip.reg[1] = (uint8_t)(f->chan_a.ton >> 8);
-  f->ay.chip.reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
-  f->ay.chip.reg[3] = (uint8_t)(f->chan_b.ton >> 8);
-  f->ay.chip.reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
-  f->ay.chip.reg[5] = (uint8_t)(f->chan_c.ton >> 8);
+  chip->reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
+  chip->reg[1] = (uint8_t)(f->chan_a.ton >> 8);
+  chip->reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
+  chip->reg[3] = (uint8_t)(f->chan_b.ton >> 8);
+  chip->reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
+  chip->reg[5] = (uint8_t)(f->chan_c.ton >> 8);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+  ay_chip_set_ay_register_fast(chip, 8, f->chan_a.amplitude);
+  ay_chip_set_ay_register_fast(chip, 9, f->chan_b.amplitude);
+  ay_chip_set_ay_register_fast(chip, 10, f->chan_c.amplitude);
 
   f->global_tick_counter++;
+}
+
+/* Players.pas:8732-8746, CheckLoopAndStop(CNum) + one pt2_get_registers
+ * call - the reusable "advance one interrupt frame's worth of registers
+ * into `chip`" building block MIG-0112's playlist-pairing driver needs
+ * (player_step_registers, player.c). Returns false once this format's own
+ * natural end is reached (mirrors Real_End[CNum] going true). */
+bool pt2_file_step_registers(pt2_file* f, ay_chip* chip) {
+  /* Players.pas:8730-8746, CheckLoopAndStop(CNum) - Force_Loop
+   * (MIG-0114) lets register generation continue past the natural
+   * end (so a shorter Turbosound-paired voice keeps looping audibly)
+   * while still marking real_end_all true, matching `if Do_Loop or
+   * Force_Loop then ...Counter := ...Max; if not Do_Loop then begin
+   * Real_End[CNum] := True; if not Force_Loop then Exit(True); end;`
+   * exactly. */
+  if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop || f->force_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    }
+    if (!f->do_loop) {
+      f->real_end_all = true;
+      if (!f->force_loop) return false;
+    }
+  }
+  pt2_get_registers(f, chip);
+  return true;
 }
 
 int pt2_file_make_buffer(pt2_file* f, int16_t* buf, int buffer_length) {
@@ -361,23 +510,31 @@ int pt2_file_make_buffer(pt2_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
-    pt2_get_registers(f);
+    /* Players.pas: PT2_Get_Registers's own first statement, `if
+     * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
+     * MIG-0108/MIG-0112) - pt2_file_step_registers is the shared building
+     * block player_step_registers (player.c) also uses when this format
+     * is playlist-paired as Turbosound's second voice; here it targets
+     * this file's own private chip (standalone use). */
+    if (!pt2_file_step_registers(f, &f->ay.chip)) break;
     if (!ay->int_flag) {
       ay->number_of_tiks = ay_tiks_in_interrupt << 32;
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   return ay->buf_len;
 }

@@ -148,7 +148,10 @@ static void test_atari_emulate_vbl_scheduling(void) {
 
   atari_emulate a;
   atari_emulate_init(&a, mem, sizeof(mem), &ay, MC68000_FREQ, 1000,
-                      2000000.0 /* atari.pas's AyFreq, not settings.pas's AY_Freq */);
+                      2000000.0 /* atari.pas's AyFreq, not settings.pas's AY_Freq */,
+                      MC68000_FREQ / 1000.0 /* vbl_freq consistent with the
+                                              * vbl_period=1000 above */,
+                      true /* is_ste */);
   a.tick_count_max = 1000000;
   a.do_loop = true;
 

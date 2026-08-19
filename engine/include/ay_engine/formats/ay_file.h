@@ -123,4 +123,28 @@ ay_file_status ay_file_load(ay_file* f, const uint8_t* data, size_t size,
  * combination in this milestone's loader glue. */
 int ay_file_make_buffer(ay_file* f, int16_t* buf, int buffer_length);
 
+/* MIG-0010 update: Players.pas's AY_Get_Registers (14049-14065) - the
+ * register-only, no-audio-synthesis sibling of MakeBufferAY, used by
+ * Convs.pas's VBL2PSG/VBL2VTX (the SAME generic per-tick dispatch every
+ * other format uses for PSG/VTX register-write-log export - a real
+ * .ay file's own FT.AY populates All_GetRegisters[0] with this exact
+ * procedure, Players.pas:2915-2948, so it genuinely reaches the
+ * "else" VBL2PSG/VBL2VTX branch, NOT the separate FT.ZXAY/FT.OUT/
+ * FT.EPSG raw-register-trace branches those share their own similarly-
+ * named identifiers with by coincidence of vocabulary, not by being the
+ * same format - see migration_debt.yaml). Steps the Z80 core forward
+ * exactly one interrupt frame (matching AY_Get_Registers' own `repeat
+ * Z80_Step; if CurrentTact>=MaxTStates then ... exit; until False`) and
+ * updates f->global_tick_counter/real_end_all exactly like ay_file_
+ * make_buffer's own frame-rollover branch, WITHOUT ever calling
+ * ay_synthesizer_ay - engine/src/hw/z80_bus.c's own AY-port-write
+ * handler has no reentrant-synthesis call the way atari_emulate.c's
+ * does (confirmed by direct inspection), so no buf=NULL-style
+ * neutralization is needed here the way sndh_file_seek_fast_forward
+ * needed it. Returns true if a real frame was generated (chip.reg[] is
+ * valid), false once real_end_all is set - an idempotent no-op after
+ * that point, matching every <fmt>_file_step_registers' own contract
+ * (player_step_registers' own doc comment). */
+bool ay_file_step_registers(ay_file* f);
+
 #endif /* AY_ENGINE_AY_FILE_H */

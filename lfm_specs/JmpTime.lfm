@@ -1,0 +1,55 @@
+object FrmJpTime: TFrmJpTime
+  Left = 309
+  Height = 89
+  Top = 173
+  Width = 215
+  BorderStyle = bsDialog
+  Caption = 'Jump to time'
+  ClientHeight = 89
+  ClientWidth = 215
+  Font.Height = -11
+  OnShow = FormShow
+  Position = poScreenCenter
+  LCLVersion = '3.0.0.3'
+  object Label1: TLabel
+    Left = 112
+    Height = 13
+    Top = 12
+    Width = 88
+    Caption = 'Minutes:Seconds'
+  end
+  object lbTrkLen: TLabel
+    Left = 11
+    Height = 13
+    Top = 35
+    Width = 43
+    Caption = 'lbTrkLen'
+  end
+  object Button1: TButton
+    Left = 8
+    Height = 25
+    Top = 56
+    Width = 96
+    Caption = 'Jump'
+    Default = True
+    ModalResult = 1
+    TabOrder = 0
+  end
+  object Button2: TButton
+    Left = 112
+    Height = 25
+    Top = 56
+    Width = 91
+    Cancel = True
+    Caption = 'Cancel'
+    ModalResult = 2
+    TabOrder = 1
+  end
+  object Edit1: TEdit
+    Left = 8
+    Height = 21
+    Top = 8
+    Width = 97
+    TabOrder = 2
+  end
+end

@@ -13,9 +13,11 @@
  * equivalent of the original's CreateRectRgn+CombineRgn(RGN_OR) loop
  * followed by SetWindowRgn. Call after the window has a realized
  * GdkWindow (i.e. from a "realize" signal handler or after
- * gtk_widget_show, not before). No DPI/`Scale` support yet (see file
- * comment) - always applies the table at 1:1 pixel scale. */
-void gui_apply_main_window_shape(GdkWindow* window);
+ * gtk_widget_show, not before). `scale` (1 or 2, Tools.pas: CBDoubleSz's
+ * own Scale global, MIG-0119) multiplies every span, matching the
+ * original's own `x * Scale` etc. exactly - pass 1 for the common,
+ * non-scaled case. */
+void gui_apply_main_window_shape(GdkWindow* window, int scale);
 
 /* Same idea as gui_apply_main_window_shape, but for About.pas's own
  * 343x346 window silhouette (ay_emul/rgn2.inc's separate 300-span

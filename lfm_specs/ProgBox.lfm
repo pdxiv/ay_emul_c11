@@ -1,0 +1,51 @@
+object FrmPrBox: TFrmPrBox
+  Left = 518
+  Height = 85
+  Top = 322
+  Width = 369
+  BorderIcons = []
+  BorderStyle = bsDialog
+  Caption = 'Searching for tunes'
+  ClientHeight = 85
+  ClientWidth = 369
+  Font.Height = -11
+  Position = poMainFormCenter
+  LCLVersion = '3.0.0.3'
+  Visible = True
+  object ProgressBar1: TProgressBar
+    Left = 8
+    Height = 16
+    Top = 32
+    Width = 353
+    TabOrder = 0
+  end
+  object Button1: TButton
+    Left = 8
+    Height = 25
+    Top = 56
+    Width = 176
+    Cancel = True
+    Caption = 'Abort current operation'
+    ModalResult = 2
+    TabOrder = 1
+    OnClick = Button1Click
+  end
+  object Label1: TLabel
+    Left = 8
+    Height = 13
+    Top = 8
+    Width = 352
+    Alignment = taRightJustify
+    Anchors = [akTop, akLeft, akRight]
+    AutoSize = False
+  end
+  object Button2: TButton
+    Left = 185
+    Height = 25
+    Top = 56
+    Width = 176
+    Caption = 'Switch off tunes finder'
+    TabOrder = 2
+    OnClick = Button2Click
+  end
+end

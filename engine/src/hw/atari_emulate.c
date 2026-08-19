@@ -170,7 +170,8 @@ static int int_ack(void* userdata, int level) {
 
 void atari_emulate_init(atari_emulate* a, uint8_t* mem, uint32_t mem_size,
                         ay_engine* ay, double mc68000_freq,
-                        int64_t vbl_period, double ay_freq) {
+                        int64_t vbl_period, double ay_freq, double vbl_freq,
+                        bool is_ste) {
   memset(a, 0, sizeof(*a));
   a->mem = mem;
   a->mem_size = mem_size;
@@ -178,6 +179,13 @@ void atari_emulate_init(atari_emulate* a, uint8_t* mem, uint32_t mem_size,
   a->mc68000_freq = mc68000_freq;
   a->vbl_period = vbl_period;
   a->ay_freq = ay_freq;
+  a->vbl_freq = vbl_freq;
+  a->is_ste = is_ste;
+  /* MIG-0120: seeds mfp_timer_mode/mfp_timer_freq consistently with
+   * mfp_init's own MC_BY_MFP_DEFAULT (13.0/4.0) seed for mfp.mc_by_mfp -
+   * see atari_emulate_init's own header comment. */
+  a->mfp_timer_mode = 0;
+  a->mfp_timer_freq = mc68000_freq * 4.0 / 13.0;
   a->tick_count_max = 1; /* caller overrides for real playback; a nonzero
                           * default avoids an immediate real_end_all on the
                           * very first VBL for standalone/test use. */
@@ -192,8 +200,13 @@ void atari_emulate_init(atari_emulate* a, uint8_t* mem, uint32_t mem_size,
   m68k_bus_add_flat_region(&a->bus, 0, mem_size - 1, mem);
   m68k_bus_add_callback_region(&a->bus, 0xFFFA00, 0xFFFA2F, mfp_bus_read,
                                 mfp_bus_write, &a->mfp_ctx);
-  m68k_bus_add_callback_region(&a->bus, 0xFF8900, 0xFF89FF, dma_region_read,
-                                dma_region_write, a);
+  /* atari.pas:1078-1110 - a plain Atari ST has no DMA-sound hardware at
+   * all; the $FF8900-$FF89FF region is only mapped for an STe (MIG-0121,
+   * see is_ste's own struct comment). */
+  if (a->is_ste) {
+    m68k_bus_add_callback_region(&a->bus, 0xFF8900, 0xFF89FF, dma_region_read,
+                                  dma_region_write, a);
+  }
   m68k_bus_add_callback_region(&a->bus, 0xFF8800, 0xFF88FF, ym_region_read,
                                 ym_region_write, a);
   a->bus.int_ack = int_ack;
@@ -215,6 +228,33 @@ void atari_emulate_init(atari_emulate* a, uint8_t* mem, uint32_t mem_size,
 void atari_emulate_enable_starscream_timing(atari_emulate* a, bool enable) {
   (void)a; /* singleton Musashi core - see m68k_bus.h's file comment */
   m68k_bus_enable_starscream_timing_override(enable);
+}
+
+/* MainWin.pas:1636-1650 - see atari_emulate.h's own comment. */
+void atari_emulate_set_mc68000_freq(atari_emulate* a, double freq) {
+  if (freq < 2000000.0 || freq > 16000000.0) return; /* MainWin.pas:1638 */
+  a->mc68000_freq = freq;
+  a->vbl_period = (int64_t)(a->mc68000_freq / a->vbl_freq + 0.5);
+  a->ay->frq_ay_by_frq_z80 =
+      (int64_t)(a->ay_freq / a->mc68000_freq / 8.0 * 4294967296.0 + 0.5);
+  if (a->mfp_timer_freq > 0.0) {
+    a->mfp.mc_by_mfp = a->mc68000_freq / a->mfp_timer_freq;
+  }
+}
+
+/* MainWin.pas:1563-1585 - see atari_emulate.h's own comment. */
+void atari_emulate_set_mfp_freq(atari_emulate* a, int mode, double freq_hz) {
+  if (mode == 0) {
+    a->mfp_timer_mode = 0;
+    a->mfp_timer_freq = freq_hz;
+  } else if (mode == 1 && freq_hz >= 1000000.0 && freq_hz <= 4365292.0) {
+    a->mfp_timer_mode = 1;
+    a->mfp_timer_freq = freq_hz;
+  } else {
+    return; /* MainWin.pas:1567-1577's if/else-if: no third branch, state
+             * is left completely untouched otherwise. */
+  }
+  a->mfp.mc_by_mfp = a->mc68000_freq / a->mfp_timer_freq;
 }
 
 /* atari.pas:1436-1523 */

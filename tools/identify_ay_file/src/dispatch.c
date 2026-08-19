@@ -38,32 +38,52 @@
  *      This tool reproduces Tier A and B exactly, reproduces every Tier C
  *      magic check exactly, and reproduces Module_Detector's *entire*
  *      format list for extensionless input (migration_debt.yaml
- *      MIG-0023), in the same order, with two documented approximations:
- *        (a) STC/PSC/FTC/PT3/GTR (which have simple Ay_Emul.fmt byte
- *            signatures) are re-tested via a direct multi-anchor
- *            substring search rather than Pascal's fuller structural
- *            FoundXXX check - equivalent for these five in practice (see
- *            detect_signature_trackers.c's comment) but not a byte-for-
- *            byte port, so confidence=probable.
- *        (b) ST1/ST3/ASC1/ASC0/STF/STP/PT2/PT1/SQT/FLS (which have NO
- *            byte signature at all - full structural ports, see
- *            detect_st_family.c/detect_pt_asc_family.c/detect_stf.c/
- *            detect_fls.c) are only checked with the candidate window
- *            anchored at file offset 0, NOT at every possible offset the
- *            way Players.pas's real sliding scan does. Module_Detector's
- *            true sliding scan exists to find tracker data embedded
- *            anywhere in a file (e.g. inside a TRD/SCL disk image, or
- *            after a BASIC loader); reproducing that for these ten
- *            substantially heavier structural checks (one of which -
- *            STF - runs a full custom depacker) would mean re-running
- *            each of them at every byte offset of a potentially large
- *            file, which is disproportionate for an identification tool.
- *            Standalone extensionless tracker files (the common real
- *            case this covers) start their data at offset 0, so this
- *            still closes the vast majority of MIG-0023's original gap;
- *            the "embedded inside a disk image" sub-case remains
- *            undetected and is called out explicitly in
- *            identify_ay_file.md.
+ *      MIG-0023) as a genuine byte-by-byte sliding scan
+ *      (scan_whole_file_module_detector below), re-running all seventeen
+ *      FoundXXX checks at every candidate offset in Pascal's exact order,
+ *      same as Module_Detector's own `repeat Inc(F_Offset) ... until
+ *      May_Quit or (F_Offset >= FilSiz)` loop (Players.pas:6835-7017).
+ *      Note this corrects an earlier misconception in this codebase: an
+ *      older version of this tool substituted a direct Ay_Emul.fmt-
+ *      signature substring search for STC/PSC/FTC/PT3/GTR, believing it
+ *      "equivalent in practice" to Module_Detector's real FoundSTC/
+ *      FoundPSC/FoundFTC/FoundPT3/FoundGTR structural checks. Tracing
+ *      every reference to Ay_Emul.fmt's `match=` fields through
+ *      filetypes.pas showed they are consumed ONLY by its desktop
+ *      shared-mime-info XML writer (Rewrite/Writeln calls building
+ *      Ay_Emul.xml for OS file-manager registration) - `grep`ing all of
+ *      Players.pas confirms `formatParams`/`.matches` is never referenced
+ *      there at all. So those signatures were never actually part of the
+ *      program's own file-identification logic in any tier; real
+ *      Module_Detector identification for all seventeen formats always
+ *      goes through genuine pointer/table-following FoundXXX functions,
+ *      now all ported (detect_st_family.c, detect_pt_asc_family.c,
+ *      detect_stf.c, detect_fls.c, detect_signature_trackers.c's
+ *      detect_stc_structural/detect_gtr_structural/detect_ftc_structural,
+ *      detect_pt3.c's detect_pt3_structural, detect_pt_asc_family.c's
+ *      detect_psc_structural). The old substring-search functions
+ *      (scan_whole_file_for_signature_trackers, scan_whole_file_for_pt3)
+ *      are kept only for reference/tests, no longer called from here.
+ *
+ *      The final `IntegrityCheck` confirmation step (a LoadTrackerModule
+ *      + GetTimeXXX call computing a playable duration, rejecting a
+ *      structural match if it comes back zero) is now also performed for
+ *      ALL SEVENTEEN formats - via integrity_check.c, which links against
+ *      engine/libayengine.a and reuses its already oracle-validated
+ *      per-format GetTimeXXX ports (migration_debt.yaml MIG-0023b/
+ *      MIG-0101/MIG-0103/MIG-0104) rather than re-deriving the same
+ *      Pascal logic a second time independently. 12 formats have their
+ *      own engine/ port (STC, ASC, ASC0, STP, PT2, PT3, PSC, FTC, PT1,
+ *      GTR, FLS, SQT); ST1/ST3/STF have none of their own but reuse
+ *      STC's/STP's via a small converter (st_convert.h/MIG-0105),
+ *      exactly mirroring LoadTrackerModule's own real dispatch
+ *      (Players.pas:2547-2558: ST1/ST3 convert to STC's layout, STF
+ *      converts to STP's). confidence=definite once confirmed, matching
+ *      Pascal, which never reports a match that failed IntegrityCheck at
+ *      all. IMPORTANT: unlike the other 14, ST1/ST3/STF have NOT been
+ *      oracle-diff-validated against a real file - none exists anywhere
+ *      in this repo's test corpus - see st_convert.h's file comment and
+ *      migration_debt.yaml MIG-0105 for the full caveat.
  *
  * 2. ay_emul/Ay_Emul.fmt is the authoritative, data-driven source of every
  *    format's canonical name, extension(s) and (where present) magic-byte
@@ -91,6 +111,7 @@
 #include "identify/detect_stf.h"
 #include "identify/detect_vtx.h"
 #include "identify/detect_ym.h"
+#include "identify/integrity_check.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -195,22 +216,91 @@ static bool run_named_detector(const filebuf* f, const char* format, detection* 
   return false;
 }
 
-/* Tier C Module_Detector fallback, in Players.pas's exact if/elseif order
- * (Players.pas:6901-7002) - see this file's top comment for the two
- * documented approximations. */
+/* Tier C Module_Detector fallback: a real byte-by-byte sliding scan over
+ * the whole file, re-running every structural detector at every offset,
+ * in Players.pas's exact if/elseif order (Players.pas:6901-7002:
+ * FoundST1, FoundST3, FoundSTC, FoundASC1, FoundASC0, FoundSTF, FoundSTP,
+ * FoundPT2, FoundPT3(False), FoundPT3(True), FoundPSC(False),
+ * FoundPSC(True), FoundFTC, FoundPT1, FoundGTR, FoundSQT, FoundFLS -
+ * first match wins), matching Module_Detector's own `repeat Inc(F_Offset)
+ * ... until May_Quit or (F_Offset >= FilSiz)` loop (Players.pas:6835-7017).
+ *
+ * Each detector is written to treat offset 0 of the filebuf it's given as
+ * the candidate window start (mirroring Pascal's F_Frame := @F_Buffer
+ * [F_Index], a pointer into the buffer at the current slide offset) - so
+ * sliding is implemented here by handing each detector a "windowed" view
+ * of the real buffer (same backing memory, `data` advanced by `base`,
+ * `size` shrunk to match) rather than threading a base-offset parameter
+ * through every detector's internal offset arithmetic. This is a pure
+ * reframing, not a behavioural approximation: it is exactly Pascal's own
+ * F_Frame indirection, just expressed as a pointer+length pair instead of
+ * a live pointer into a rolling double-buffer.
+ *
+ * Confidence stays "probable" throughout (never "definite"): the one
+ * remaining documented approximation is that every detector still omits
+ * the final IntegrityCheck confirmation step (see detect_st_family.h's
+ * file comment) - migration_debt.yaml MIG-0023. */
+/* If `matched`, `d` already holds the structural guess - confirm it via
+ * engine/'s oracle-validated GetTimeXXX port (migration_debt.yaml
+ * MIG-0023b), exactly mirroring Pascal's own FoundXXX tail (`if
+ * IntegrityCheck then ... if TimeLength = 0 then exit`): a structural
+ * match alone is provisional, only a nonzero computed duration makes it
+ * real. On confirmation, upgrades confidence to "definite" (Pascal never
+ * reports a Module_Detector match that failed IntegrityCheck at all) and
+ * signals the caller to accept it; on failure, resets `d` back to a
+ * clean slate so the next detector tried at this same offset doesn't
+ * inherit a rejected candidate's leftover fields. */
+static bool confirm(bool matched, detection* d, bool (*check)(const uint8_t*, size_t),
+                     const filebuf* w) {
+  if (!matched) return false;
+  if (check(w->data, w->size)) {
+    d->confidence = "definite";
+    return true;
+  }
+  detection_init(d);
+  return false;
+}
+
+static bool confirm_asc(bool matched, detection* d, bool is_asc0, const filebuf* w) {
+  if (!matched) return false;
+  if (integrity_check_asc(w->data, w->size, is_asc0)) {
+    d->confidence = "definite";
+    return true;
+  }
+  detection_init(d);
+  return false;
+}
+
 static bool scan_whole_file_module_detector(const filebuf* f, detection* d) {
-  if (detect_st1_structural(f, d)) return true;
-  if (detect_st3_structural(f, d)) return true;
-  if (scan_whole_file_for_signature_trackers(f, d)) return true; /* STC/PSC/FTC/GTR */
-  if (detect_asc1_structural(f, d)) return true;
-  if (detect_asc0_structural(f, d)) return true;
-  if (detect_stf_structural(f, d)) return true;
-  if (detect_stp_structural(f, d)) return true;
-  if (detect_pt2_structural(f, d)) return true;
-  if (scan_whole_file_for_pt3(f, d)) return true;
-  if (detect_pt1_structural(f, d)) return true;
-  if (detect_sqt_structural(f, d)) return true;
-  if (detect_fls_structural(f, d)) return true;
+  for (size_t base = 0; base < f->size; base++) {
+    filebuf w = {f->data + base, f->size - base, 0};
+    /* ST1/ST3/STF: no engine/ port exists for these formats themselves,
+     * but LoadTrackerModule converts them to STC's/STP's own layout at
+     * load time in the real program too (Players.pas:2547-2558) - see
+     * st_convert.h - so their IntegrityCheck reuses the exact same
+     * stc_file_load/stp_file_load via a conversion step first. Unlike
+     * every other confirm() call here, these three have NOT been
+     * oracle-diff-validated against a real file (none exists anywhere in
+     * this repo) - see st_convert.h's file comment and
+     * migration_debt.yaml for the caveat. */
+    if (confirm(detect_st1_structural(&w, d), d, integrity_check_st1, &w)) return true;
+    if (confirm(detect_st3_structural(&w, d), d, integrity_check_st3, &w)) return true;
+    if (confirm(detect_stc_structural(&w, d), d, integrity_check_stc, &w)) return true;
+    if (confirm_asc(detect_asc1_structural(&w, d), d, false, &w)) return true;
+    if (confirm_asc(detect_asc0_structural(&w, d), d, true, &w)) return true;
+    if (confirm(detect_stf_structural(&w, d), d, integrity_check_stf, &w)) return true;
+    if (confirm(detect_stp_structural(&w, d), d, integrity_check_stp, &w)) return true;
+    if (confirm(detect_pt2_structural(&w, d), d, integrity_check_pt2, &w)) return true;
+    if (confirm(detect_pt3_structural(&w, false, d), d, integrity_check_pt3, &w)) return true;
+    if (confirm(detect_pt3_structural(&w, true, d), d, integrity_check_pt3, &w)) return true;
+    if (confirm(detect_psc_structural(&w, false, d), d, integrity_check_psc, &w)) return true;
+    if (confirm(detect_psc_structural(&w, true, d), d, integrity_check_psc, &w)) return true;
+    if (confirm(detect_ftc_structural(&w, d), d, integrity_check_ftc, &w)) return true;
+    if (confirm(detect_pt1_structural(&w, d), d, integrity_check_pt1, &w)) return true;
+    if (confirm(detect_gtr_structural(&w, d), d, integrity_check_gtr, &w)) return true;
+    if (confirm(detect_sqt_structural(&w, d), d, integrity_check_sqt, &w)) return true;
+    if (confirm(detect_fls_structural(&w, d), d, integrity_check_fls, &w)) return true;
+  }
   return false;
 }
 

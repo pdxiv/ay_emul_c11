@@ -1,0 +1,1167 @@
+object FrmPLIEdit: TFrmPLIEdit
+  Left = 728
+  Height = 436
+  Top = 179
+  Width = 678
+  AutoSize = True
+  BorderIcons = []
+  BorderStyle = bsDialog
+  Caption = 'List''s Item Adjusting'
+  ClientHeight = 436
+  ClientWidth = 678
+  Font.Height = -11
+  OnCreate = FormCreate
+  Position = poScreenCenter
+  ShowHint = True
+  LCLVersion = '3.0.0.3'
+  object GBInfo: TGroupBox
+    AnchorSideLeft.Control = Owner
+    AnchorSideTop.Control = Owner
+    Left = 8
+    Height = 242
+    Top = 4
+    Width = 309
+    AutoSize = True
+    BorderSpacing.Left = 8
+    BorderSpacing.Top = 4
+    Caption = 'Information'
+    ClientHeight = 224
+    ClientWidth = 305
+    TabOrder = 0
+    object LAuthor: TLabel
+      AnchorSideTop.Control = EAuthor
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EAuthor
+      Left = 23
+      Height = 13
+      Top = 4
+      Width = 36
+      Anchors = [akTop, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 2
+      Caption = 'Author'
+    end
+    object LTitle: TLabel
+      AnchorSideTop.Control = ETitle
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EAuthor
+      Left = 37
+      Height = 13
+      Top = 27
+      Width = 22
+      Anchors = [akTop, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 2
+      Caption = 'Title'
+    end
+    object LProgram: TLabel
+      AnchorSideTop.Control = EProgram
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EAuthor
+      Left = 16
+      Height = 13
+      Top = 50
+      Width = 43
+      Anchors = [akTop, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 2
+      Caption = 'Program'
+    end
+    object LTracker: TLabel
+      AnchorSideTop.Control = ETracker
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EAuthor
+      Left = 23
+      Height = 13
+      Top = 73
+      Width = 36
+      Anchors = [akTop, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 2
+      Caption = 'Tracker'
+    end
+    object LComputer: TLabel
+      AnchorSideTop.Control = EComputer
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EAuthor
+      Left = 8
+      Height = 13
+      Top = 96
+      Width = 51
+      Anchors = [akTop, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 2
+      Caption = 'Computer'
+    end
+    object LDate: TLabel
+      AnchorSideTop.Control = EDate
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EAuthor
+      Left = 35
+      Height = 13
+      Top = 119
+      Width = 24
+      Anchors = [akTop, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 2
+      Caption = 'Date'
+    end
+    object LComment: TLabel
+      AnchorSideLeft.Control = MComment
+      AnchorSideTop.Control = EDate
+      AnchorSideTop.Side = asrBottom
+      Left = 8
+      Height = 13
+      Top = 138
+      Width = 52
+      BorderSpacing.Top = 2
+      Caption = 'Comment:'
+    end
+    object EAuthor: TEdit
+      AnchorSideTop.Control = GBInfo
+      AnchorSideRight.Control = GBInfo
+      AnchorSideRight.Side = asrBottom
+      Left = 61
+      Height = 21
+      Top = 0
+      Width = 236
+      Anchors = [akTop, akRight]
+      BorderSpacing.Right = 8
+      TabOrder = 0
+    end
+    object ETitle: TEdit
+      AnchorSideLeft.Control = EAuthor
+      AnchorSideTop.Control = EAuthor
+      AnchorSideTop.Side = asrBottom
+      Left = 61
+      Height = 21
+      Top = 23
+      Width = 236
+      BorderSpacing.Top = 2
+      TabOrder = 1
+    end
+    object EProgram: TEdit
+      AnchorSideLeft.Control = ETitle
+      AnchorSideTop.Control = ETitle
+      AnchorSideTop.Side = asrBottom
+      Left = 61
+      Height = 21
+      Top = 46
+      Width = 236
+      BorderSpacing.Top = 2
+      TabOrder = 2
+    end
+    object ETracker: TEdit
+      AnchorSideLeft.Control = EProgram
+      AnchorSideTop.Control = EProgram
+      AnchorSideTop.Side = asrBottom
+      Left = 61
+      Height = 21
+      Top = 69
+      Width = 236
+      BorderSpacing.Top = 2
+      TabOrder = 3
+    end
+    object EComputer: TEdit
+      AnchorSideLeft.Control = ETracker
+      AnchorSideTop.Control = ETracker
+      AnchorSideTop.Side = asrBottom
+      Left = 61
+      Height = 21
+      Top = 92
+      Width = 236
+      BorderSpacing.Top = 2
+      TabOrder = 4
+    end
+    object EDate: TEdit
+      AnchorSideLeft.Control = EComputer
+      AnchorSideTop.Control = EComputer
+      AnchorSideTop.Side = asrBottom
+      Left = 61
+      Height = 21
+      Top = 115
+      Width = 236
+      BorderSpacing.Top = 2
+      TabOrder = 5
+    end
+    object MComment: TMemo
+      AnchorSideLeft.Control = GBInfo
+      AnchorSideTop.Control = LComment
+      AnchorSideTop.Side = asrBottom
+      AnchorSideRight.Control = EAuthor
+      AnchorSideRight.Side = asrBottom
+      Left = 8
+      Height = 65
+      Top = 151
+      Width = 289
+      Anchors = [akTop, akLeft, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Bottom = 8
+      TabOrder = 6
+    end
+  end
+  object GBPlay: TGroupBox
+    AnchorSideLeft.Control = GBInfo
+    AnchorSideLeft.Side = asrBottom
+    AnchorSideTop.Control = GBInfo
+    Left = 325
+    Height = 373
+    Top = 4
+    Width = 345
+    AutoSize = True
+    BorderSpacing.Left = 8
+    BorderSpacing.Right = 8
+    Caption = 'Playback'
+    ClientHeight = 355
+    ClientWidth = 341
+    TabOrder = 2
+    object GBChip: TGroupBox
+      AnchorSideLeft.Control = GBPlay
+      AnchorSideTop.Control = GBPlay
+      Left = 4
+      Height = 73
+      Top = 0
+      Width = 96
+      AutoSize = True
+      BorderSpacing.Left = 4
+      Caption = 'Chip'
+      ClientHeight = 55
+      ClientWidth = 92
+      TabOrder = 0
+      object RBChAY: TRadioButton
+        Left = 4
+        Height = 17
+        Top = 0
+        Width = 84
+        BorderSpacing.Left = 4
+        BorderSpacing.Right = 4
+        Caption = 'AY-3-8910/12'
+        TabOrder = 0
+      end
+      object RBChYM: TRadioButton
+        AnchorSideLeft.Control = RBChAY
+        AnchorSideTop.Control = RBChAY
+        AnchorSideTop.Side = asrBottom
+        Left = 4
+        Height = 17
+        Top = 17
+        Width = 57
+        BorderSpacing.Right = 4
+        Caption = 'YM2149'
+        TabOrder = 1
+      end
+      object RBChDef: TRadioButton
+        AnchorSideLeft.Control = RBChAY
+        AnchorSideTop.Control = RBChYM
+        AnchorSideTop.Side = asrBottom
+        Left = 4
+        Height = 17
+        Top = 34
+        Width = 56
+        BorderSpacing.Right = 4
+        BorderSpacing.Bottom = 4
+        Caption = 'Default'
+        Checked = True
+        TabOrder = 2
+        TabStop = True
+      end
+    end
+    object GBChipFrq: TGroupBox
+      AnchorSideLeft.Control = GBChip
+      AnchorSideTop.Control = GBChip
+      AnchorSideTop.Side = asrBottom
+      Left = 4
+      Height = 158
+      Top = 77
+      Width = 169
+      AutoSize = True
+      BorderSpacing.Top = 4
+      Caption = 'Chip frequency'
+      ClientHeight = 140
+      ClientWidth = 165
+      TabOrder = 1
+      object PnChipFrqL: TPanel
+        AnchorSideLeft.Control = GBChipFrq
+        AnchorSideTop.Control = PnChipFrqR
+        AnchorSideBottom.Control = PnChipFrqR
+        AnchorSideBottom.Side = asrBottom
+        Left = 4
+        Height = 136
+        Top = 0
+        Width = 95
+        Anchors = [akTop, akLeft, akBottom]
+        AutoSize = True
+        BorderSpacing.Left = 4
+        BevelOuter = bvNone
+        ChildSizing.VerticalSpacing = 2
+        ChildSizing.EnlargeVertical = crsHomogenousChildResize
+        ChildSizing.ShrinkVertical = crsHomogenousChildResize
+        ChildSizing.Layout = cclLeftToRightThenTopToBottom
+        ChildSizing.ControlsPerLine = 1
+        ClientHeight = 136
+        ClientWidth = 95
+        TabOrder = 0
+        object RBChFrZX: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 0
+          Width = 95
+          Caption = 'ZX Spectrum'
+          TabOrder = 0
+        end
+        object RBChFrPnt: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 23
+          Width = 95
+          Caption = 'Pentagon 128K'
+          TabOrder = 1
+        end
+        object RBChFrST: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 46
+          Width = 95
+          Caption = 'Atari ST'
+          TabOrder = 2
+        end
+        object RBChFrCPC: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 69
+          Width = 95
+          Caption = 'Amstrad CPC'
+          TabOrder = 3
+        end
+        object RBChFrOther: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 92
+          Width = 95
+          Caption = 'Another'
+          TabOrder = 4
+        end
+        object RBChFrDef: TRadioButton
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 115
+          Width = 95
+          Caption = 'Default'
+          Checked = True
+          TabOrder = 5
+          TabStop = True
+        end
+      end
+      object PnChipFrqR: TPanel
+        AnchorSideLeft.Control = PnChipFrqL
+        AnchorSideLeft.Side = asrBottom
+        AnchorSideTop.Control = GBChipFrq
+        Left = 101
+        Height = 136
+        Top = 0
+        Width = 60
+        AutoSize = True
+        BorderSpacing.Left = 2
+        BorderSpacing.Right = 4
+        BorderSpacing.Bottom = 4
+        BevelOuter = bvNone
+        ClientHeight = 136
+        ClientWidth = 60
+        TabOrder = 1
+        object EChFrZX: TEdit
+          AnchorSideLeft.Control = PnChipFrqR
+          AnchorSideTop.Control = PnChipFrqR
+          Left = 0
+          Height = 21
+          Top = 0
+          Width = 60
+          Alignment = taCenter
+          Color = clForm
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabStop = False
+          TabOrder = 0
+          Text = '1773400'
+        end
+        object EChFrPnt: TEdit
+          AnchorSideLeft.Control = EChFrZX
+          AnchorSideTop.Control = EChFrZX
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 23
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Color = clForm
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabStop = False
+          TabOrder = 1
+          Text = '1750000'
+        end
+        object EChFrST: TEdit
+          AnchorSideLeft.Control = EChFrPnt
+          AnchorSideTop.Control = EChFrPnt
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 46
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Color = clForm
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabStop = False
+          TabOrder = 2
+          Text = '2000000'
+        end
+        object EChFrCPC: TEdit
+          AnchorSideLeft.Control = EChFrST
+          AnchorSideTop.Control = EChFrST
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 69
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Color = clForm
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabStop = False
+          TabOrder = 3
+          Text = '1000000'
+        end
+        object EChFrOther: TEdit
+          AnchorSideLeft.Control = EChFrCPC
+          AnchorSideTop.Control = EChFrCPC
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 92
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Constraints.MinWidth = 60
+          TabOrder = 4
+          OnChange = EChFrOtherChange
+        end
+        object EChFrMixer: TEdit
+          AnchorSideLeft.Control = EChFrOther
+          AnchorSideTop.Control = EChFrOther
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 115
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Color = clForm
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabStop = False
+          TabOrder = 5
+          Text = 'Mixer'
+        end
+      end
+    end
+    object GBPlrFrq: TGroupBox
+      AnchorSideLeft.Control = GBChipFrq
+      AnchorSideTop.Control = GBChipFrq
+      AnchorSideTop.Side = asrBottom
+      Left = 4
+      Height = 112
+      Top = 239
+      Width = 169
+      AutoSize = True
+      BorderSpacing.Top = 4
+      BorderSpacing.Bottom = 4
+      Caption = 'Player frequency'
+      ClientHeight = 94
+      ClientWidth = 165
+      TabOrder = 2
+      object PnPlrFrqL: TPanel
+        AnchorSideLeft.Control = GBPlrFrq
+        AnchorSideTop.Control = PnPlrFrqR
+        AnchorSideBottom.Control = PnPlrFrqR
+        AnchorSideBottom.Side = asrBottom
+        Left = 4
+        Height = 90
+        Top = 0
+        Width = 95
+        Anchors = [akTop, akLeft, akBottom]
+        AutoSize = True
+        BorderSpacing.Left = 4
+        BevelOuter = bvNone
+        ChildSizing.VerticalSpacing = 2
+        ChildSizing.EnlargeVertical = crsHomogenousChildResize
+        ChildSizing.ShrinkVertical = crsHomogenousSpaceResize
+        ChildSizing.Layout = cclLeftToRightThenTopToBottom
+        ChildSizing.ControlsPerLine = 1
+        ClientHeight = 90
+        ClientWidth = 95
+        TabOrder = 0
+        object RBPlrFrZX: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 0
+          Width = 95
+          Caption = 'ZX Spectrum'
+          TabOrder = 0
+        end
+        object RBPlrFrPnt: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 23
+          Width = 95
+          Caption = 'Pentagon 128K'
+          TabOrder = 1
+        end
+        object RBPlrFrOther: TRadioButton
+          Left = 0
+          Height = 21
+          Top = 46
+          Width = 95
+          Caption = 'Another'
+          TabOrder = 2
+        end
+        object RBPlrFrDef: TRadioButton
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 69
+          Width = 95
+          Caption = 'Default'
+          Checked = True
+          TabOrder = 3
+          TabStop = True
+        end
+      end
+      object PnPlrFrqR: TPanel
+        AnchorSideLeft.Control = PnPlrFrqL
+        AnchorSideLeft.Side = asrBottom
+        AnchorSideTop.Control = GBPlrFrq
+        Left = 101
+        Height = 90
+        Top = 0
+        Width = 60
+        AutoSize = True
+        BorderSpacing.Left = 2
+        BorderSpacing.Right = 4
+        BorderSpacing.Bottom = 4
+        BevelOuter = bvNone
+        ClientHeight = 90
+        ClientWidth = 60
+        TabOrder = 1
+        object EPlrFrZX: TEdit
+          AnchorSideLeft.Control = PnPlrFrqR
+          AnchorSideTop.Control = PnPlrFrqR
+          Left = 0
+          Height = 21
+          Top = 0
+          Width = 60
+          Alignment = taCenter
+          Color = clForm
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabStop = False
+          TabOrder = 0
+          Text = '50000'
+        end
+        object EPlrFrPnt: TEdit
+          AnchorSideLeft.Control = EPlrFrZX
+          AnchorSideTop.Control = EPlrFrZX
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 23
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Color = clBtnFace
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabStop = False
+          TabOrder = 1
+          Text = '48828'
+        end
+        object EPlrFrOther: TEdit
+          AnchorSideLeft.Control = EPlrFrPnt
+          AnchorSideTop.Control = EPlrFrPnt
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 46
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Constraints.MinWidth = 60
+          TabOrder = 2
+          OnChange = EPlrFrOtherChange
+        end
+        object EPlrFrMixer: TEdit
+          AnchorSideLeft.Control = EPlrFrOther
+          AnchorSideTop.Control = EPlrFrOther
+          AnchorSideTop.Side = asrBottom
+          Left = 0
+          Height = 21
+          Top = 69
+          Width = 60
+          Alignment = taCenter
+          BorderSpacing.Top = 2
+          Color = clForm
+          Constraints.MinWidth = 60
+          ReadOnly = True
+          TabOrder = 3
+          Text = 'Mixer'
+        end
+      end
+    end
+    object GBNChans: TGroupBox
+      AnchorSideLeft.Control = GBChip
+      AnchorSideLeft.Side = asrBottom
+      Left = 108
+      Height = 73
+      Top = 0
+      Width = 123
+      AutoSize = True
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 4
+      Caption = 'Number of channels'
+      ClientHeight = 55
+      ClientWidth = 119
+      TabOrder = 3
+      object RBNStereo: TRadioButton
+        Left = 4
+        Height = 17
+        Top = 0
+        Width = 51
+        BorderSpacing.Left = 4
+        BorderSpacing.Right = 4
+        Caption = 'Stereo'
+        TabOrder = 0
+      end
+      object RBNMono: TRadioButton
+        AnchorSideLeft.Control = RBNStereo
+        AnchorSideTop.Control = RBNStereo
+        AnchorSideTop.Side = asrBottom
+        Left = 4
+        Height = 17
+        Top = 17
+        Width = 49
+        BorderSpacing.Right = 4
+        Caption = 'Mono'
+        TabOrder = 1
+      end
+      object RBNDef: TRadioButton
+        AnchorSideLeft.Control = RBNMono
+        AnchorSideTop.Control = RBNMono
+        AnchorSideTop.Side = asrBottom
+        Left = 4
+        Height = 17
+        Top = 34
+        Width = 56
+        BorderSpacing.Right = 4
+        BorderSpacing.Bottom = 4
+        Caption = 'Default'
+        Checked = True
+        TabOrder = 2
+        TabStop = True
+      end
+    end
+    object GBChAmp: TGroupBox
+      AnchorSideLeft.Control = GBChipFrq
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = GBChipFrq
+      Left = 181
+      Height = 130
+      Top = 77
+      Width = 143
+      AutoSize = True
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 4
+      Caption = 'Channels amplification'
+      ClientHeight = 112
+      ClientWidth = 139
+      TabOrder = 4
+      object LAmpA: TLabel
+        AnchorSideLeft.Control = RBAmpOther
+        AnchorSideLeft.Side = asrBottom
+        AnchorSideTop.Control = RBAmpOther
+        AnchorSideTop.Side = asrCenter
+        Left = 68
+        Height = 13
+        Top = 29
+        Width = 7
+        BorderSpacing.Left = 4
+        Caption = 'A'
+      end
+      object LAmpB: TLabel
+        AnchorSideLeft.Control = LAmpA
+        AnchorSideTop.Control = EAmpBL
+        AnchorSideTop.Side = asrCenter
+        Left = 68
+        Height = 13
+        Top = 51
+        Width = 6
+        Caption = 'B'
+      end
+      object LAmpC: TLabel
+        AnchorSideLeft.Control = LAmpB
+        AnchorSideTop.Control = EAmpCL
+        AnchorSideTop.Side = asrCenter
+        Left = 68
+        Height = 13
+        Top = 72
+        Width = 7
+        Caption = 'C'
+      end
+      object RBAmpOther: TRadioButton
+        AnchorSideLeft.Control = RBAmpStd
+        AnchorSideTop.Control = RBAmpStd
+        AnchorSideTop.Side = asrBottom
+        Left = 4
+        Height = 17
+        Top = 27
+        Width = 60
+        BorderSpacing.Top = 8
+        Caption = 'Another'
+        TabOrder = 2
+      end
+      object EAmpAL: TEdit
+        AnchorSideLeft.Control = LAmpA
+        AnchorSideLeft.Side = asrBottom
+        Left = 77
+        Height = 21
+        Top = 26
+        Width = 29
+        Alignment = taCenter
+        BorderSpacing.Left = 2
+        TabOrder = 3
+        OnChange = CustomChAllocSet
+      end
+      object EAmpAR: TEdit
+        AnchorSideLeft.Control = EAmpAL
+        AnchorSideLeft.Side = asrBottom
+        Left = 106
+        Height = 21
+        Top = 26
+        Width = 29
+        Alignment = taCenter
+        BorderSpacing.Right = 4
+        TabOrder = 4
+        OnChange = CustomChAllocSet
+      end
+      object RBAmpStd: TRadioButton
+        Left = 4
+        Height = 17
+        Top = 2
+        Width = 65
+        BorderSpacing.Left = 4
+        Caption = 'Standard'
+        TabOrder = 0
+      end
+      object CBAmpStd: TComboBox
+        AnchorSideLeft.Control = RBAmpStd
+        AnchorSideLeft.Side = asrBottom
+        AnchorSideTop.Control = RBAmpStd
+        AnchorSideTop.Side = asrCenter
+        Left = 71
+        Height = 21
+        Top = 0
+        Width = 58
+        BorderSpacing.Left = 2
+        BorderSpacing.Right = 4
+        ItemHeight = 13
+        Items.Strings = (
+          'Mono'
+          'ABC'
+          'ACB'
+          'BAC'
+          'BCA'
+          'CAB'
+          'CBA'
+        )
+        Style = csDropDownList
+        TabOrder = 1
+        OnSelect = CBAmpStdSelect
+      end
+      object RBAmpDef: TRadioButton
+        AnchorSideLeft.Control = RBAmpOther
+        AnchorSideTop.Control = EAmpCL
+        AnchorSideTop.Side = asrBottom
+        Left = 4
+        Height = 17
+        Top = 91
+        Width = 56
+        BorderSpacing.Top = 2
+        BorderSpacing.Right = 4
+        BorderSpacing.Bottom = 4
+        Caption = 'Default'
+        Checked = True
+        TabOrder = 9
+        TabStop = True
+      end
+      object EAmpBL: TEdit
+        AnchorSideLeft.Control = EAmpAL
+        AnchorSideTop.Control = EAmpAL
+        AnchorSideTop.Side = asrBottom
+        Left = 77
+        Height = 21
+        Top = 47
+        Width = 29
+        Alignment = taCenter
+        TabOrder = 5
+        OnChange = CustomChAllocSet
+      end
+      object EAmpBR: TEdit
+        AnchorSideLeft.Control = EAmpAR
+        AnchorSideTop.Control = EAmpAR
+        AnchorSideTop.Side = asrBottom
+        Left = 106
+        Height = 21
+        Top = 47
+        Width = 29
+        Alignment = taCenter
+        BorderSpacing.Right = 4
+        TabOrder = 6
+        OnChange = CustomChAllocSet
+      end
+      object EAmpCL: TEdit
+        AnchorSideLeft.Control = EAmpBL
+        AnchorSideTop.Control = EAmpBL
+        AnchorSideTop.Side = asrBottom
+        Left = 77
+        Height = 21
+        Top = 68
+        Width = 29
+        Alignment = taCenter
+        TabOrder = 7
+        OnChange = CustomChAllocSet
+      end
+      object EAmpCR: TEdit
+        AnchorSideLeft.Control = EAmpBR
+        AnchorSideTop.Control = EAmpBR
+        AnchorSideTop.Side = asrBottom
+        Left = 106
+        Height = 21
+        Top = 68
+        Width = 29
+        Alignment = taCenter
+        BorderSpacing.Right = 4
+        TabOrder = 8
+        OnChange = CustomChAllocSet
+      end
+    end
+    object GBDef: TGroupBox
+      AnchorSideLeft.Control = GBPlrFrq
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideBottom.Control = GBPlrFrq
+      AnchorSideBottom.Side = asrBottom
+      Left = 181
+      Height = 62
+      Top = 289
+      Width = 156
+      Anchors = [akLeft, akBottom]
+      AutoSize = True
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 4
+      Caption = 'Default list settings'
+      ClientHeight = 44
+      ClientWidth = 152
+      TabOrder = 5
+      object BDefLoad: TButton
+        Left = 8
+        Height = 32
+        Hint = 'Copy the entire playlist playback settings to the current item'
+        Top = 4
+        Width = 64
+        AutoSize = True
+        BorderSpacing.Left = 8
+        BorderSpacing.Top = 4
+        BorderSpacing.Bottom = 8
+        Caption = 'Load'
+        Constraints.MinHeight = 32
+        Constraints.MinWidth = 64
+        TabOrder = 0
+        OnClick = BDefLoadClick
+      end
+      object BDefSave: TButton
+        AnchorSideLeft.Control = BDefLoad
+        AnchorSideLeft.Side = asrBottom
+        AnchorSideTop.Control = BDefLoad
+        Left = 80
+        Height = 32
+        Hint = 'Copy the current item settings to the entire playlist playback settings'
+        Top = 4
+        Width = 64
+        AutoSize = True
+        BorderSpacing.Left = 8
+        BorderSpacing.Right = 8
+        BorderSpacing.Bottom = 8
+        Caption = 'Save'
+        Constraints.MinHeight = 32
+        Constraints.MinWidth = 64
+        TabOrder = 1
+        OnClick = BDefSaveClick
+      end
+    end
+  end
+  object BOk: TButton
+    AnchorSideTop.Control = BCancel
+    AnchorSideRight.Control = BCancel
+    Left = 462
+    Height = 32
+    Top = 393
+    Width = 96
+    Anchors = [akTop, akRight]
+    BorderSpacing.Right = 8
+    Caption = 'OK'
+    Constraints.MinHeight = 32
+    Constraints.MinWidth = 96
+    Default = True
+    ModalResult = 1
+    TabOrder = 3
+  end
+  object BCancel: TButton
+    AnchorSideTop.Control = GBPlay
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = GBPlay
+    AnchorSideRight.Side = asrBottom
+    Left = 566
+    Height = 32
+    Top = 393
+    Width = 96
+    Anchors = [akTop, akRight]
+    BorderSpacing.Top = 16
+    BorderSpacing.Right = 8
+    BorderSpacing.Bottom = 16
+    Cancel = True
+    Caption = 'Cancel'
+    Constraints.MinHeight = 32
+    Constraints.MinWidth = 96
+    ModalResult = 2
+    TabOrder = 4
+  end
+  object GBFile: TGroupBox
+    AnchorSideLeft.Control = GBInfo
+    AnchorSideTop.Control = GBInfo
+    AnchorSideTop.Side = asrBottom
+    AnchorSideRight.Control = GBInfo
+    AnchorSideRight.Side = asrBottom
+    Left = 8
+    Height = 147
+    Top = 250
+    Width = 309
+    Anchors = [akTop, akLeft, akRight]
+    AutoSize = True
+    BorderSpacing.Top = 4
+    BorderSpacing.Bottom = 8
+    Caption = 'File'
+    ClientHeight = 129
+    ClientWidth = 305
+    TabOrder = 1
+    object LFType: TLabel
+      AnchorSideLeft.Control = EFName
+      AnchorSideTop.Control = CBFType
+      AnchorSideTop.Side = asrCenter
+      Left = 8
+      Height = 13
+      Top = 29
+      Width = 68
+      Alignment = taRightJustify
+      AutoSize = False
+      Caption = 'Type'
+    end
+    object LFOffs: TLabel
+      AnchorSideLeft.Control = LFType
+      AnchorSideTop.Control = EFOffs
+      AnchorSideTop.Side = asrCenter
+      Left = 8
+      Height = 13
+      Top = 54
+      Width = 68
+      Alignment = taRightJustify
+      AutoSize = False
+      Caption = 'Offset'
+    end
+    object LFAddr: TLabel
+      AnchorSideTop.Control = EFAddr
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EFAddr
+      Left = 160
+      Height = 13
+      Top = 29
+      Width = 76
+      Alignment = taRightJustify
+      Anchors = [akTop, akRight]
+      AutoSize = False
+      BorderSpacing.Left = 4
+      BorderSpacing.Right = 2
+      Caption = 'Address'
+    end
+    object LFTime: TLabel
+      AnchorSideTop.Control = EFTime
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EFTime
+      Left = 160
+      Height = 13
+      Top = 54
+      Width = 76
+      Alignment = taRightJustify
+      Anchors = [akTop, akRight]
+      AutoSize = False
+      BorderSpacing.Right = 2
+      Caption = 'Time'
+    end
+    object LFLen: TLabel
+      AnchorSideLeft.Control = LFOffs
+      AnchorSideTop.Control = EFLen
+      AnchorSideTop.Side = asrCenter
+      Left = 8
+      Height = 13
+      Top = 79
+      Width = 68
+      Alignment = taRightJustify
+      AutoSize = False
+      Caption = 'Length'
+    end
+    object LFLoop: TLabel
+      AnchorSideTop.Control = EFLoop
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EFLoop
+      Left = 160
+      Height = 13
+      Top = 79
+      Width = 76
+      Alignment = taRightJustify
+      Anchors = [akTop, akRight]
+      AutoSize = False
+      BorderSpacing.Right = 2
+      Caption = 'Loop'
+    end
+    object LFSpec: TLabel
+      AnchorSideTop.Control = EFSpec
+      AnchorSideTop.Side = asrCenter
+      AnchorSideRight.Control = EFSpec
+      Left = 160
+      Height = 13
+      Top = 104
+      Width = 76
+      Alignment = taRightJustify
+      Anchors = [akTop, akRight]
+      AutoSize = False
+      BorderSpacing.Right = 2
+      Caption = 'Specific'
+    end
+    object EFName: TEdit
+      AnchorSideLeft.Control = GBFile
+      AnchorSideTop.Control = GBFile
+      AnchorSideRight.Control = GBFile
+      AnchorSideRight.Side = asrBottom
+      Left = 8
+      Height = 21
+      Top = 0
+      Width = 289
+      Anchors = [akTop, akLeft, akRight]
+      BorderSpacing.Left = 8
+      BorderSpacing.Right = 8
+      TabOrder = 0
+    end
+    object CBFType: TComboBox
+      AnchorSideLeft.Control = LFType
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = EFName
+      AnchorSideTop.Side = asrBottom
+      Left = 78
+      Height = 21
+      Top = 25
+      Width = 72
+      BorderSpacing.Left = 2
+      BorderSpacing.Top = 4
+      ItemHeight = 13
+      Style = csDropDownList
+      TabOrder = 1
+    end
+    object EFOffs: TEdit
+      AnchorSideLeft.Control = LFOffs
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = CBFType
+      AnchorSideTop.Side = asrBottom
+      Left = 78
+      Height = 21
+      Top = 50
+      Width = 72
+      Alignment = taCenter
+      BorderSpacing.Left = 2
+      BorderSpacing.Top = 4
+      TabOrder = 2
+    end
+    object EFLen: TEdit
+      AnchorSideLeft.Control = LFLen
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = EFOffs
+      AnchorSideTop.Side = asrBottom
+      Left = 78
+      Height = 21
+      Top = 75
+      Width = 72
+      Alignment = taCenter
+      BorderSpacing.Left = 2
+      BorderSpacing.Top = 4
+      TabOrder = 3
+    end
+    object EFAddr: TEdit
+      AnchorSideTop.Control = CBFType
+      AnchorSideRight.Control = EFName
+      AnchorSideRight.Side = asrBottom
+      Left = 238
+      Height = 21
+      Top = 25
+      Width = 59
+      Alignment = taCenter
+      Anchors = [akTop, akRight]
+      TabOrder = 4
+    end
+    object EFTime: TEdit
+      AnchorSideLeft.Control = EFAddr
+      AnchorSideTop.Control = EFAddr
+      AnchorSideTop.Side = asrBottom
+      Left = 238
+      Height = 21
+      Top = 50
+      Width = 59
+      Alignment = taCenter
+      BorderSpacing.Top = 4
+      TabOrder = 5
+    end
+    object EFLoop: TEdit
+      AnchorSideLeft.Control = EFTime
+      AnchorSideTop.Control = EFTime
+      AnchorSideTop.Side = asrBottom
+      Left = 238
+      Height = 21
+      Top = 75
+      Width = 59
+      Alignment = taCenter
+      BorderSpacing.Top = 4
+      TabOrder = 6
+    end
+    object EFSpec: TEdit
+      AnchorSideLeft.Control = EFLoop
+      AnchorSideTop.Control = EFLoop
+      AnchorSideTop.Side = asrBottom
+      Left = 238
+      Height = 21
+      Top = 100
+      Width = 59
+      Alignment = taCenter
+      BorderSpacing.Top = 4
+      BorderSpacing.Bottom = 8
+      TabOrder = 7
+    end
+  end
+end

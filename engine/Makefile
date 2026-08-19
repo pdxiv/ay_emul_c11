@@ -27,7 +27,9 @@ SRC = src/hw/ay.c src/hw/z80_bus.c src/hw/m68k_bus.c src/hw/mfp.c src/hw/dma_sou
       src/formats/sndh_file.c src/formats/vtx_file.c src/formats/pt1_file.c src/formats/gtr_file.c \
       src/formats/fls_file.c src/formats/stc_file.c src/formats/stp_file.c src/formats/pt2_file.c \
       src/formats/fxm_file.c src/formats/psm_file.c src/formats/asc_file.c src/formats/ftc_file.c \
-      src/formats/psc_file.c src/formats/sqt_file.c src/player.c \
+      src/formats/psc_file.c src/formats/sqt_file.c src/formats/out_file.c \
+      src/formats/epsg_file.c src/player.c \
+      src/psg_export.c \
       third_party/z80/z80.c \
       $(MUSASHI_DIR)/m68kcpu.c $(MUSASHI_DIR)/m68kdasm.c \
       $(MUSASHI_DIR)/m68kops.c $(MUSASHI_DIR)/softfloat/softfloat.c

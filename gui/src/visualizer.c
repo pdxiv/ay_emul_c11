@@ -29,11 +29,23 @@ void gui_visualizer_init(gui_visualizer* v) {
 
 void gui_visualizer_tick(gui_visualizer* v, ay_engine* engine, uint32_t smp) {
   const ay_vis_point* cp = engine ? ay_engine_get_vis_point(engine, smp) : NULL;
+  /* MainWin.pas:5405/847/894: every TSMode check below reads the engine's
+   * CURRENT ts_mode, matching AYVisualisation/RedrawVisSpectrum reading
+   * the live TSMode global at redraw time (MIG-0110) - not whatever it
+   * was when `cp` was captured. */
+  bool ts_mode = engine != NULL && engine->ts_mode;
 
   if (cp) {
-    v->amp_a = cp->amp_a;
-    v->amp_b = cp->amp_b;
-    v->amp_c = cp->amp_c;
+    /* MainWin.pas:5402-5410: `T := R[0].AmpA; ...; if TSMode then begin
+     * if R[1].AmpA > T then T := R[1].AmpA; ... end`. */
+    v->amp_a = cp->r[0].amp_a;
+    v->amp_b = cp->r[0].amp_b;
+    v->amp_c = cp->r[0].amp_c;
+    if (ts_mode) {
+      if (cp->r[1].amp_a > v->amp_a) v->amp_a = cp->r[1].amp_a;
+      if (cp->r[1].amp_b > v->amp_b) v->amp_b = cp->r[1].amp_b;
+      if (cp->r[1].amp_c > v->amp_c) v->amp_c = cp->r[1].amp_c;
+    }
   } else {
     v->amp_a = v->amp_b = v->amp_c = 0;
   }
@@ -44,18 +56,25 @@ void gui_visualizer_tick(gui_visualizer* v, ay_engine* engine, uint32_t smp) {
    * same bar (spa_points[i+1] < Tn <= spa_points[i], i.e. bucket
    * boundaries run from high tone-period/low-frequency at index 0
    * down to low tone-period/high-frequency at index spa_num - a
-   * higher AY tone PERIOD means a LOWER audible pitch). */
+   * higher AY tone PERIOD means a LOWER audible pitch). MainWin.pas:
+   * 832-846's own `for n := 0 to 1 do ... if not TSMode then break`
+   * folds chip 1's channels into the same buckets too, when TSMode
+   * (MIG-0110). */
   int fresh[GUI_VIS_SPA_NUM];
   memset(fresh, 0, sizeof(fresh));
   if (cp) {
-    for (int i = 0; i < GUI_VIS_SPA_NUM; i++) {
-      int lo = v->spa_points[i + 1], hi = v->spa_points[i];
-      if (cp->tn_a > lo && cp->tn_a <= hi && fresh[i] < cp->amp_a)
-        fresh[i] = cp->amp_a;
-      if (cp->tn_b > lo && cp->tn_b <= hi && fresh[i] < cp->amp_b)
-        fresh[i] = cp->amp_b;
-      if (cp->tn_c > lo && cp->tn_c <= hi && fresh[i] < cp->amp_c)
-        fresh[i] = cp->amp_c;
+    int n_max = ts_mode ? 1 : 0;
+    for (int n = 0; n <= n_max; n++) {
+      const ay_vis_reg* r = &cp->r[n];
+      for (int i = 0; i < GUI_VIS_SPA_NUM; i++) {
+        int lo = v->spa_points[i + 1], hi = v->spa_points[i];
+        if (r->tn_a > lo && r->tn_a <= hi && fresh[i] < r->amp_a)
+          fresh[i] = r->amp_a;
+        if (r->tn_b > lo && r->tn_b <= hi && fresh[i] < r->amp_b)
+          fresh[i] = r->amp_b;
+        if (r->tn_c > lo && r->tn_c <= hi && fresh[i] < r->amp_c)
+          fresh[i] = r->amp_c;
+      }
     }
   }
 

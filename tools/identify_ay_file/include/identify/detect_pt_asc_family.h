@@ -15,4 +15,10 @@ bool detect_pt2_structural(const filebuf* f, detection* d);
 bool detect_pt1_structural(const filebuf* f, detection* d);
 bool detect_sqt_structural(const filebuf* f, detection* d);
 
+/* Real Module_Detector structural port: Players.pas's FoundPSC(PSC1_00)
+ * (5969). Grouped here (rather than detect_signature_trackers.c) since
+ * it's a genuine pointer/table-following structural check, same style as
+ * its siblings above - not a signature match. */
+bool detect_psc_structural(const filebuf* f, bool psc1_00, detection* d);
+
 #endif /* IDENTIFY_DETECT_PT_ASC_FAMILY_H */

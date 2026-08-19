@@ -44,6 +44,143 @@ static void copy_fixed_field(const uint8_t* src, size_t src_size,
   if (start > 0) memmove(out, out + start, n - start + 1);
 }
 
+/* Players.pas:15664-15767, GetTimePSC's per-channel opcode-walk (channels
+ * A and C - identical opcode ranges: $C0..$FF is the only terminal case,
+ * $67..$6D/$6F..$7B are 1-byte-payload no-ops, $6E reads a new shared
+ * delay byte `b`, anything else is a bare 1-byte no-op). `*a` is the
+ * per-channel note-skip counter (mirrors Pascal's a1/a3); when it reaches
+ * 0 the opcode stream is walked until a terminal $C0..$FF opcode sets the
+ * next skip count. Unlike the original (which has no bound on this
+ * per-channel walk beyond the 65536-byte buffer itself, tolerated by
+ * Pascal's oversized Index array), this adds an explicit iteration cap
+ * (1<<16) per MIG-0103's own safety requirement - PSC's ported
+ * get-time function, unlike PT3's/FTC's, has no equivalent to Pascal's
+ * own DLCatcher to bound a hostile/corrupt file's walk, so this port adds
+ * one. Returns false on any bounds/iteration-cap violation (caller must
+ * bail: Tm=Lp=0, matching RaiseBadFileStructure's caller-visible effect
+ * without actually raising). */
+static bool psc_time_step_ac(const uint8_t* d, uint32_t* j, int* a,
+                              uint8_t* b) {
+  int guard = 1 << 16;
+
+  (*a)--;
+  if (*a != 0) return true;
+  for (;;) {
+    if (--guard < 0) return false;
+    if (*j >= 65536) return false;
+    uint8_t op = d[*j];
+    if (op >= 0xC0) {
+      *a = op - 0xBF;
+      (*j)++;
+      return true;
+    } else if ((op >= 0x67 && op <= 0x6D) || (op >= 0x6F && op <= 0x7B)) {
+      (*j)++;
+    } else if (op == 0x6E) {
+      (*j)++;
+      if (*j >= 65536) return false;
+      *b = d[*j];
+    }
+    (*j)++;
+  }
+}
+
+/* Players.pas:15664-15767, GetTimePSC's channel-B opcode-walk - same
+ * shape as psc_time_step_ac but with channel B's own distinct opcode
+ * ranges ($67..$6D/$6F..$79/$7B vs A/C's $67..$6D/$6F..$7B, plus the
+ * extra $7A: Inc(j2,3) case A/C don't have). See psc_time_step_ac for the
+ * safety-cap rationale. */
+static bool psc_time_step_b(const uint8_t* d, uint32_t* j, int* a,
+                             uint8_t* b) {
+  int guard = 1 << 16;
+
+  (*a)--;
+  if (*a != 0) return true;
+  for (;;) {
+    if (--guard < 0) return false;
+    if (*j >= 65536) return false;
+    uint8_t op = d[*j];
+    if (op >= 0xC0) {
+      *a = op - 0xBF;
+      (*j)++;
+      return true;
+    } else if ((op >= 0x67 && op <= 0x6D) || (op >= 0x6F && op <= 0x79) ||
+               op == 0x7B) {
+      (*j)++;
+    } else if (op == 0x6E) {
+      (*j)++;
+      if (*j >= 65536) return false;
+      *b = d[*j];
+    } else if (op == 0x7A) {
+      *j += 3;
+    }
+    (*j)++;
+  }
+}
+
+/* Players.pas:15664-15767, GetTimePSC - computes the song's total
+ * duration and loop-point tick, walking the position list (at
+ * PSC_PatternsPointer, the same table PSC_Get_Registers's own
+ * positions_pointer walk consumes at playback time) exactly once. Called
+ * from psc_file_load before f->positions_pointer is ever mutated by
+ * playback, so f->positions_pointer at that point still holds the raw
+ * PSC_PatternsPointer value read from the file header - no separate
+ * field is needed to remember it. On a malformed file (any bounds
+ * violation the original's own RaiseBadFileStructure guards would have
+ * caught, or the added per-channel-walk iteration cap tripping), returns
+ * 0/0 rather than raising, matching pt3_get_time's own precedent (a
+ * duration-precompute failure degrades to "no known duration" rather
+ * than failing the whole load, which has already succeeded by the time
+ * this runs). */
+static void psc_get_time(const psc_file* f, int64_t* out_tm,
+                          int64_t* out_lp) {
+  const uint8_t* d = f->data;
+  int64_t tm = 0, lp = 0;
+  uint8_t b = (uint8_t)f->delay;
+  uint32_t patterns_pointer = f->positions_pointer;
+  uint32_t pptr, cptr;
+
+  pptr = patterns_pointer + 1;
+  if (pptr >= 65536) goto fail;
+  while (d[pptr] != 255) {
+    pptr += 8;
+    if (pptr >= 65536) goto fail;
+  }
+  if (pptr >= 65536 - 2) goto fail;
+  cptr = rd16(d, pptr + 1);
+  cptr += 1;
+
+  pptr = patterns_pointer + 1;
+  if (pptr >= 65536) goto fail;
+  while (d[pptr] != 255) {
+    if (pptr == cptr) lp = tm;
+    if (pptr >= 65536 - 6) goto fail;
+    {
+      uint32_t j1 = rd16(d, pptr + 1);
+      uint32_t j2 = rd16(d, pptr + 3);
+      uint32_t j3 = rd16(d, pptr + 5);
+      uint8_t lines = d[pptr];
+      int a1 = 1, a2 = 1, a3 = 1;
+      int i;
+
+      pptr += 8;
+      if (pptr >= 65536) goto fail;
+      for (i = 0; i < lines; i++) {
+        if (!psc_time_step_ac(d, &j1, &a1, &b)) goto fail;
+        if (!psc_time_step_b(d, &j2, &a2, &b)) goto fail;
+        if (!psc_time_step_ac(d, &j3, &a3, &b)) goto fail;
+        tm += b;
+      }
+    }
+  }
+  *out_tm = tm;
+  *out_lp = lp;
+  return;
+
+fail:
+  *out_tm = 0;
+  *out_lp = 0;
+}
+
 /* ModTypes variant 7 (Players.pas:145-150): PSC_MusicName[0..68]@0
  * PSC_UnknownPointer@69 (word) PSC_PatternsPointer@71 (word)
  * PSC_Delay@73 (byte) PSC_OrnamentsPointer@74 (word)
@@ -106,6 +243,9 @@ psc_file_status psc_file_load(psc_file* f, const uint8_t* data, size_t size,
   f->chan_c.note_skip_counter = 1;
 
   f->global_tick_counter = 0;
+  f->do_loop = false;
+  f->real_end_all = false;
+  psc_get_time(f, &f->global_tick_max, &f->loop_tick); /* MIG-0103 */
 
   return PSC_FILE_OK;
 }
@@ -117,7 +257,8 @@ psc_file_status psc_file_load(psc_file* f, const uint8_t* data, size_t size,
  * with no double-counting risk. chan_id (0=A,1=B,2=C) replicates the
  * Pascal source's `@Chan = @PlParams[CNum].PSC_B` pointer-identity
  * checks for opcodes $7A/$7B. */
-static void pattern_interpreter(psc_file* f, psc_channel* chan, int chan_id) {
+static void pattern_interpreter(psc_file* f, ay_chip* chip, psc_channel* chan,
+                                 int chan_id) {
   bool quit = false;
   bool b1b = false, b2b = false, b3b = false, b4b = false, b5b = false,
        b6b = false, b7b = false;
@@ -169,10 +310,10 @@ static void pattern_interpreter(psc_file* f, psc_channel* chan, int chan_id) {
       chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 1);
       if (chan_id == 1) {
         ay_chip_set_ay_register_fast(
-            &f->ay.chip, 13, (uint8_t)(rb(f->data, chan->address_in_pattern) & 15));
+            chip, 13, (uint8_t)(rb(f->data, chan->address_in_pattern) & 15));
         uint16_t env = rd16(f->data, (uint32_t)chan->address_in_pattern + 1);
-        f->ay.chip.reg[11] = (uint8_t)(env & 0xFF);
-        f->ay.chip.reg[12] = (uint8_t)(env >> 8);
+        chip->reg[11] = (uint8_t)(env & 0xFF);
+        chip->reg[12] = (uint8_t)(env >> 8);
         chan->address_in_pattern = (uint16_t)(chan->address_in_pattern + 2);
       }
     } else if (op == 0x7B) {
@@ -251,7 +392,8 @@ static void pattern_interpreter(psc_file* f, psc_channel* chan, int chan_id) {
 }
 
 /* Players.pas:10237-10354, GetRegisters. */
-static void get_registers(psc_file* f, psc_channel* chan, uint8_t* temp_mixer) {
+static void get_registers(psc_file* f, ay_chip* chip, psc_channel* chan,
+                           uint8_t* temp_mixer) {
   if (chan->enabled) {
     uint8_t j = chan->note;
     if (chan->ornament_enabled) {
@@ -326,18 +468,18 @@ static void get_registers(psc_file* f, psc_channel* chan, uint8_t* temp_mixer) {
       chan->amplitude = (uint8_t)(chan->amplitude | 16);
 
     if ((chan->amplitude & 16) && (b & 8)) {
-      uint16_t env = (uint16_t)(f->ay.chip.reg[11] | (f->ay.chip.reg[12] << 8));
+      uint16_t env = (uint16_t)(chip->reg[11] | (chip->reg[12] << 8));
       env = (uint16_t)(env + (int8_t)rb(f->data, (uint32_t)chan->sample_pointer +
                                                       (uint32_t)chan->position_in_sample * 6 + 2));
-      f->ay.chip.reg[11] = (uint8_t)(env & 0xFF);
-      f->ay.chip.reg[12] = (uint8_t)(env >> 8);
+      chip->reg[11] = (uint8_t)(env & 0xFF);
+      chip->reg[12] = (uint8_t)(env >> 8);
     } else {
       chan->noise_accumulator = (uint8_t)(
           chan->noise_accumulator +
           rb(f->data, (uint32_t)chan->sample_pointer +
                           (uint32_t)chan->position_in_sample * 6 + 2));
       if ((b & 8) == 0)
-        f->ay.chip.reg[6] = (uint8_t)(chan->noise_accumulator & 31);
+        chip->reg[6] = (uint8_t)(chan->noise_accumulator & 31);
     }
 
     if ((b & 128) == 0) chan->loop_sample_position = chan->position_in_sample;
@@ -359,9 +501,15 @@ static void get_registers(psc_file* f, psc_channel* chan, uint8_t* temp_mixer) {
   *temp_mixer >>= 1;
 }
 
-/* Players.pas:10053-10423, PSC_Get_Registers (minus CheckLoopAndStop -
- * matches this project's other tracker-format ports' own precedent). */
-static void psc_get_registers(psc_file* f) {
+/* Players.pas:10053-10423, PSC_Get_Registers. MIG-0108: the
+ * CheckLoopAndStop-equivalent check now lives in psc_file_make_buffer's
+ * tick loop instead of here (see its own comment) - functionally
+ * equivalent since nothing else touches global_tick_counter in
+ * between. MIG-0112: `chip` is the target AY register file this frame's
+ * writes land in - `&f->ay.chip` for standalone/self playback, or an
+ * EXTERNAL chip (another player's ay_engine.chip2) when this format is
+ * playlist-paired as Turbosound's second voice. */
+static void psc_get_registers(psc_file* f, ay_chip* chip) {
   uint8_t temp_mixer;
 
   f->delay_counter--;
@@ -383,11 +531,14 @@ static void psc_get_registers(psc_file* f) {
       f->chan_c.note_skip_counter = 1;
     }
     f->chan_a.note_skip_counter--;
-    if (f->chan_a.note_skip_counter == 0) pattern_interpreter(f, &f->chan_a, 0);
+    if (f->chan_a.note_skip_counter == 0)
+      pattern_interpreter(f, chip, &f->chan_a, 0);
     f->chan_b.note_skip_counter--;
-    if (f->chan_b.note_skip_counter == 0) pattern_interpreter(f, &f->chan_b, 1);
+    if (f->chan_b.note_skip_counter == 0)
+      pattern_interpreter(f, chip, &f->chan_b, 1);
     f->chan_c.note_skip_counter--;
-    if (f->chan_c.note_skip_counter == 0) pattern_interpreter(f, &f->chan_c, 2);
+    if (f->chan_c.note_skip_counter == 0)
+      pattern_interpreter(f, chip, &f->chan_c, 2);
 
     f->chan_a.noise_accumulator =
         (uint8_t)(f->chan_a.noise_accumulator + f->noise_base);
@@ -399,24 +550,54 @@ static void psc_get_registers(psc_file* f) {
   }
 
   temp_mixer = 0;
-  get_registers(f, &f->chan_a, &temp_mixer);
-  get_registers(f, &f->chan_b, &temp_mixer);
-  get_registers(f, &f->chan_c, &temp_mixer);
+  get_registers(f, chip, &f->chan_a, &temp_mixer);
+  get_registers(f, chip, &f->chan_b, &temp_mixer);
+  get_registers(f, chip, &f->chan_c, &temp_mixer);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 7, temp_mixer);
+  ay_chip_set_ay_register_fast(chip, 7, temp_mixer);
 
-  f->ay.chip.reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
-  f->ay.chip.reg[1] = (uint8_t)(f->chan_a.ton >> 8);
-  f->ay.chip.reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
-  f->ay.chip.reg[3] = (uint8_t)(f->chan_b.ton >> 8);
-  f->ay.chip.reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
-  f->ay.chip.reg[5] = (uint8_t)(f->chan_c.ton >> 8);
+  chip->reg[0] = (uint8_t)(f->chan_a.ton & 0xFF);
+  chip->reg[1] = (uint8_t)(f->chan_a.ton >> 8);
+  chip->reg[2] = (uint8_t)(f->chan_b.ton & 0xFF);
+  chip->reg[3] = (uint8_t)(f->chan_b.ton >> 8);
+  chip->reg[4] = (uint8_t)(f->chan_c.ton & 0xFF);
+  chip->reg[5] = (uint8_t)(f->chan_c.ton >> 8);
 
-  ay_chip_set_ay_register_fast(&f->ay.chip, 8, f->chan_a.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 9, f->chan_b.amplitude);
-  ay_chip_set_ay_register_fast(&f->ay.chip, 10, f->chan_c.amplitude);
+  ay_chip_set_ay_register_fast(chip, 8, f->chan_a.amplitude);
+  ay_chip_set_ay_register_fast(chip, 9, f->chan_b.amplitude);
+  ay_chip_set_ay_register_fast(chip, 10, f->chan_c.amplitude);
 
   f->global_tick_counter++;
+}
+
+/* Players.pas:8732-8746, CheckLoopAndStop(CNum) + one psc_get_registers
+ * call - the reusable "advance one interrupt frame's worth of registers
+ * into `chip`" building block MIG-0112's playlist-pairing driver needs
+ * (player_step_registers, player.c). Returns false once this format's
+ * own natural end is reached (mirrors Real_End[CNum] going true) - the
+ * caller (whether psc_file_make_buffer below, standalone, or a pairing
+ * driver combining two formats) stops calling this once it returns
+ * false, exactly matching MakeBufferTracker's own `Real_End_All :=
+ * Real_End_All and Real_End[CNum]` accumulation. */
+bool psc_file_step_registers(psc_file* f, ay_chip* chip) {
+  /* Players.pas:8730-8746, CheckLoopAndStop(CNum) - Force_Loop
+   * (MIG-0114) lets register generation continue past the natural
+   * end (so a shorter Turbosound-paired voice keeps looping audibly)
+   * while still marking real_end_all true, matching `if Do_Loop or
+   * Force_Loop then ...Counter := ...Max; if not Do_Loop then begin
+   * Real_End[CNum] := True; if not Force_Loop then Exit(True); end;`
+   * exactly. */
+  if (f->global_tick_max > 0 && f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop || f->force_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    }
+    if (!f->do_loop) {
+      f->real_end_all = true;
+      if (!f->force_loop) return false;
+    }
+  }
+  psc_get_registers(f, chip);
+  return true;
 }
 
 int psc_file_make_buffer(psc_file* f, int16_t* buf, int buffer_length) {
@@ -429,23 +610,31 @@ int psc_file_make_buffer(psc_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
   while (ay->buf_len < buffer_length) {
-    psc_get_registers(f);
+    /* Players.pas: PSC_Get_Registers's own first statement, `if
+     * CheckLoopAndStop(CNum) then Exit;` (Players.pas:8732-8746,
+     * MIG-0108/MIG-0112) - psc_file_step_registers is the shared
+     * building block player_step_registers (player.c) also uses when
+     * this format is playlist-paired as Turbosound's second voice; here
+     * it targets this file's own private chip (standalone use). */
+    if (!psc_file_step_registers(f, &f->ay.chip)) break;
     if (!ay->int_flag) {
       ay->number_of_tiks = ay_tiks_in_interrupt << 32;
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0107: was hardcoded stereo16 */
   }
   return ay->buf_len;
 }

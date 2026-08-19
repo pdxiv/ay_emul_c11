@@ -6,7 +6,7 @@ LIB = $(ENGINE)/libayengine.a
 
 .PHONY: all clean
 
-all: test_z80_bus test_ay test_m68k_bus test_atari test_ay_file test_ym_file test_pt3_file test_sndh_file test_vtx_file
+all: test_z80_bus test_ay test_m68k_bus test_atari test_ay_file test_ym_file test_pt3_file test_sndh_file test_vtx_file test_player_pair test_psg_export test_out_file test_epsg_file
 
 $(LIB):
 	$(MAKE) -C $(ENGINE)
@@ -38,5 +38,17 @@ test_sndh_file: test_sndh_file.c $(LIB)
 test_vtx_file: test_vtx_file.c $(LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) test_vtx_file.c $(LIB) -o $@ -lm
 
+test_player_pair: test_player_pair.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) test_player_pair.c $(LIB) -o $@ -lm
+
+test_psg_export: test_psg_export.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) test_psg_export.c $(LIB) -o $@ -lm
+
+test_out_file: test_out_file.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) test_out_file.c $(LIB) -o $@ -lm
+
+test_epsg_file: test_epsg_file.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) test_epsg_file.c $(LIB) -o $@ -lm
+
 clean:
-	rm -f test_z80_bus test_ay test_m68k_bus test_atari test_ay_file test_ym_file test_pt3_file test_sndh_file test_vtx_file
+	rm -f test_z80_bus test_ay test_m68k_bus test_atari test_ay_file test_ym_file test_pt3_file test_sndh_file test_vtx_file test_player_pair test_psg_export test_out_file test_epsg_file

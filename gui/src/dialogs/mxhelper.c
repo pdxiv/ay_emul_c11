@@ -13,9 +13,13 @@ typedef struct mode_coefs {
   uint8_t al, ar, bl, br, cl, cr;
 } mode_coefs;
 
-/* MainWin.pas: CalcModeCoefs (1953-2027) - the DMA/TS/BeeperMax outputs
- * are dropped here (see mxhelper.h's own comment on why). `echo` is 85
- * for AY_Chip, 13 for YM_Chip (CalcModeCoefs:1963-1965). */
+/* MainWin.pas: CalcModeCoefs (1953-2027) - the BeeperMax/Atari_DMAMax
+ * out-params are dropped here, matching Set_Mode's own real behavior
+ * (discards them into throwaway locals), NOT because those fields
+ * don't exist in this port (see mxhelper.h's own file comment for the
+ * full trace, including what genuinely IS still unported: SBHelper-
+ * Click's separate TSDMAChG/PreAmp-search headroom reservation).
+ * `echo` is 85 for AY_Chip, 13 for YM_Chip (CalcModeCoefs:1963-1965). */
 static mode_coefs calc_mode_coefs(int mode, int echo) {
   mode_coefs c = {255, 255, 255, 255, 255, 255}; /* Mode 0: Mono */
   switch (mode) {
@@ -71,7 +75,7 @@ static void apply_preset(gui_playback* pb, int item_index) {
   int echo = (chip_type == AY_CHIP_TYPE_AY) ? 85 : 13;
   mode_coefs c = calc_mode_coefs(i, echo);
 
-  ay_engine* e = player_ay_engine(&pb->p);
+  ay_engine* e = player_ay_engine(&pb->pair.primary);
   e->chip_type = chip_type;
   e->index_al = c.al;
   e->index_ar = c.ar;

@@ -1,0 +1,137 @@
+object FrmMain: TFrmMain
+  Left = 305
+  Height = 123
+  Hint = 'Click or press Esc to cancel operation'
+  Top = 356
+  Width = 358
+  AllowDropFiles = True
+  BorderIcons = []
+  BorderStyle = bsNone
+  Caption = 'AY Emulator'
+  DragKind = dkDock
+  Font.Height = 28
+  Font.Style = [fsBold]
+  OnClose = FormClose
+  OnCreate = FormCreate
+  OnDeactivate = FormDeactivate
+  OnDestroy = FormDestroy
+  OnDropFiles = FormDropFiles
+  OnKeyDown = FormKeyDown
+  OnKeyUp = FormKeyUp
+  OnMouseDown = FormMouseDown
+  OnMouseMove = FormMouseMove
+  OnMouseUp = FormMouseUp
+  OnMouseWheelDown = FormMouseWheelDown
+  OnMouseWheelUp = FormMouseWheelUp
+  OnPaint = FormPaint
+  Position = poScreenCenter
+  LCLVersion = '3.8.0.0'
+  Scaled = False
+  Visible = True
+  object SaveDialog1: TSaveDialog
+    Options = [ofOverwritePrompt, ofHideReadOnly, ofEnableSizing]
+    Left = 120
+    Top = 16
+  end
+  object OpenDialog1: TOpenDialog
+    Options = [ofHideReadOnly, ofAllowMultiSelect, ofEnableSizing, ofViewDetail]
+    Left = 40
+    Top = 16
+  end
+  object TrayIcon1: TTrayIcon
+    PopUpMenu = PopupMenu1
+    OnDblClick = TrayIcon1DblClick
+    OnMouseDown = TrayIcon1MouseDown
+    OnMouseUp = TrayIcon1MouseUp
+    Left = 200
+    Top = 16
+  end
+  object PopupMenu1: TPopupMenu
+    AutoPopup = False
+    OnPopup = PopupMenu1Popup
+    Left = 272
+    Top = 16
+    object MIPlayPause: TMenuItem
+      Caption = 'Play / Pause'
+      ShortCut = 101
+      OnClick = MIPlayPauseClick
+    end
+    object MIRestart: TMenuItem
+      Caption = 'Restart'
+      OnClick = MIRestartClick
+    end
+    object MIStop: TMenuItem
+      Caption = 'Stop'
+      ShortCut = 86
+      OnClick = MIStopClick
+    end
+    object Separator1: TMenuItem
+      Caption = '-'
+    end
+    object MIPrevious: TMenuItem
+      Caption = 'Previous'
+      ShortCut = 100
+      OnClick = MIPreviousClick
+    end
+    object MINext: TMenuItem
+      Caption = 'Next'
+      ShortCut = 102
+      OnClick = MINextClick
+    end
+    object MIRandom: TMenuItem
+      Caption = 'Random'
+      OnClick = MIRandomClick
+    end
+    object Separator2: TMenuItem
+      Caption = '-'
+    end
+    object MIOpen: TMenuItem
+      Caption = 'Open'
+      object MIOpenFiles: TMenuItem
+        Caption = 'Files...'
+        ShortCut = 96
+        OnClick = MIOpenFilesClick
+      end
+      object MIOpenFolder: TMenuItem
+        Caption = 'Folder...'
+        ShortCut = 8268
+        OnClick = MIOpenFolderClick
+      end
+      object MIOpenCD: TMenuItem
+        Caption = 'CD...'
+        ShortCut = 16460
+        OnClick = MIOpenCDClick
+      end
+    end
+    object MIMixer: TMenuItem
+      Caption = 'Mixer'
+      ShortCut = 71
+      OnClick = MIMixerClick
+    end
+    object MITools: TMenuItem
+      Caption = 'Tools'
+      ShortCut = 80
+      OnClick = MIToolsClick
+    end
+    object MIPlaylist: TMenuItem
+      Caption = 'Playlist'
+      ShortCut = 69
+      OnClick = MIPlaylistClick
+    end
+    object Separator3: TMenuItem
+      Caption = '-'
+    end
+    object MIMinRes: TMenuItem
+      Caption = 'Minimize / Restore'
+      OnClick = MIMinResClick
+    end
+    object Separator4: TMenuItem
+      Caption = '-'
+    end
+    object MIClose: TMenuItem
+      Caption = 'Close'
+      ShortCut = 32883
+      OnClick = MICloseClick
+    end
+  end
+end

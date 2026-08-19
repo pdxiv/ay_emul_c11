@@ -24,11 +24,17 @@
  *    transcribed verbatim, not simplified).
  *  - The InitTrackerModule FT.PT1 branch (Players.pas:3570-3621).
  *
+ * Also ports:
+ *  - GetTimePT1 (duration/loop-point precompute, Players.pas:16679-16770)
+ *    as pt1_get_time, called once at the end of pt1_file_load, storing
+ *    into global_tick_max/loop_tick below. MIG-0108: a CheckLoopAndStop-
+ *    equivalent gate is now wired into pt1_file_make_buffer's tick loop
+ *    (same hoisted-into-make_buffer shape as pt3_file's own, since this
+ *    port has no per-tick Get_Registers-level early-exit convenience
+ *    the way Pascal's own CheckLoopAndStop call does) - do_loop/
+ *    real_end_all below are live, not informational.
+ *
  * Deliberately not ported here (see migration_debt.yaml):
- *  - GetTimePT1 (duration/loop-point precompute) - UI-only, matching
- *    pt3_file.h's identical rationale; no CheckLoopAndStop-equivalent
- *    gate is called from pt1_get_registers, matching pt3_get_registers's
- *    own precedent.
  *  - Embedded/rebased-pointer PT1 loading - same rationale as PT3.
  */
 #ifndef AY_ENGINE_PT1_FILE_H
@@ -83,6 +89,38 @@ typedef struct pt1_file {
 
   int64_t global_tick_counter; /* informational only - see file comment */
 
+  int64_t global_tick_max; /* GetTimePT1's `Tm` output (Players.pas:
+                            * 16679-16770) - computed by pt1_file_load via
+                            * a faithful port of GetTimePT1, a pattern-
+                            * opcode-only simulation (no audio synthesis)
+                            * that walks the position list exactly once.
+                            * 0 if the file's structure is degenerate
+                            * enough that Pascal's own GetTimePT1 would
+                            * RaiseBadFileStructure. */
+  int64_t loop_tick;       /* GetTimePT1's `Lp` output - the tick at which
+                            * PT1_LoopPosition is reached. */
+  bool do_loop;      /* MIG-0108: Players.pas: Do_Loop - see pt3_file.h's
+                       * own fields for the shape this follows. */
+  bool force_loop;   /* MIG-0114: Players.pas: Force_Loop (Tools.pas's
+                       * CBForceLoop checkbox) - lets THIS voice keep
+                       * generating registers (and so keep audibly
+                       * looping its own pattern data) past its own
+                       * natural end instead of freezing on its last
+                       * frame's frozen register values, so a shorter
+                       * voice in a mismatched-length Turbosound pair
+                       * doesn't just go silent/frozen while the longer
+                       * voice keeps playing - see <fmt>_file_step_
+                       * registers's own CheckLoopAndStop-equivalent
+                       * logic (Players.pas:8730-8746) for the exact
+                       * semantics. Distinct from do_loop (which makes
+                       * the WHOLE song loop, never setting real_end_
+                       * all at all) - force_loop still marks real_
+                       * end_all true, it just doesn't stop register
+                       * generation once that happens. */
+  bool real_end_all; /* MIG-0108: Players.pas: Real_End_All, set by
+                       * CheckLoopAndStop once global_tick_counter
+                       * reaches global_tick_max with do_loop false. */
+
   /* Raw (untranscoded CP1251), space-trimmed module title - Players.pas:
    * "else if FType = FT.PT1" (7383-7391): a fixed 30-byte field at file
    * offset 69 - added for the Phase 5 GUI, MIG-0082. */
@@ -105,4 +143,11 @@ pt1_file_status pt1_file_load(pt1_file* f, const uint8_t* data, size_t size,
  * file comment). */
 int pt1_file_make_buffer(pt1_file* f, int16_t* buf, int buffer_length);
 
+/* MIG-0112: advances one interrupt frame's worth of registers into
+ * `chip` (any ay_chip, not necessarily f->ay.chip - see pt1_file.c's own
+ * comment) and returns false once this format's own natural end is
+ * reached. The building block engine/player.c's playlist-Turbosound-
+ * pairing driver (player_step_registers) uses; pt1_file_make_buffer
+ * itself now just calls this with &f->ay.chip for standalone playback. */
+bool pt1_file_step_registers(pt1_file* f, ay_chip* chip);
 #endif /* AY_ENGINE_PT1_FILE_H */

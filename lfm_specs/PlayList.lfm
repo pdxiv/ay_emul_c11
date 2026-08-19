@@ -1,0 +1,353 @@
+object FrmPLst: TFrmPLst
+  Left = 305
+  Height = 344
+  Top = 203
+  Width = 491
+  AllowDropFiles = True
+  Caption = 'Playlist'
+  ClientHeight = 344
+  ClientWidth = 491
+  Font.Height = -11
+  OnActivate = FormActivate
+  OnConstrainedResize = FormConstrainedResize
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  OnDropFiles = FormDropFiles
+  OnHide = FormHide
+  OnShow = FormShow
+  Position = poScreenCenter
+  LCLVersion = '3.0.0.3'
+  object Panel1: TPanel
+    Left = 0
+    Height = 28
+    Top = 316
+    Width = 491
+    Align = alBottom
+    AutoSize = True
+    BevelOuter = bvNone
+    ClientHeight = 28
+    ClientWidth = 491
+    FullRepaint = False
+    TabOrder = 0
+    object SBAdd: TSpeedButton
+      AnchorSideLeft.Control = Panel1
+      AnchorSideTop.Control = Panel1
+      AnchorSideTop.Side = asrCenter
+      Left = 2
+      Height = 23
+      Top = 3
+      Width = 89
+      AutoSize = True
+      BorderSpacing.Left = 2
+      BorderSpacing.Top = 2
+      BorderSpacing.Bottom = 2
+      Constraints.MinHeight = 23
+      Constraints.MinWidth = 89
+      Caption = 'Add items'
+      OnClick = SBAddClick
+    end
+    object SBClear: TSpeedButton
+      AnchorSideLeft.Control = SBAdd
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = Panel1
+      AnchorSideTop.Side = asrCenter
+      Left = 93
+      Height = 23
+      Top = 3
+      Width = 89
+      AutoSize = True
+      BorderSpacing.Left = 2
+      Constraints.MinHeight = 23
+      Constraints.MinWidth = 89
+      Caption = 'Clear list'
+      OnClick = SBClearClick
+    end
+    object SBSave: TSpeedButton
+      AnchorSideLeft.Control = SBClear
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = Panel1
+      AnchorSideTop.Side = asrCenter
+      Left = 184
+      Height = 23
+      Top = 3
+      Width = 89
+      AutoSize = True
+      BorderSpacing.Left = 2
+      Constraints.MinHeight = 23
+      Constraints.MinWidth = 89
+      Caption = 'Save list'
+      OnClick = SBSaveClick
+    end
+    object SBTools: TSpeedButton
+      AnchorSideLeft.Control = SBSave
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = Panel1
+      AnchorSideTop.Side = asrCenter
+      Left = 275
+      Height = 23
+      Top = 3
+      Width = 89
+      AutoSize = True
+      BorderSpacing.Left = 2
+      Constraints.MinHeight = 23
+      Constraints.MinWidth = 89
+      Caption = 'List tools'
+      OnClick = SBToolsClick
+    end
+    object LTotTime: TLabel
+      AnchorSideLeft.Control = SBLoop
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Side = asrBottom
+      AnchorSideRight.Side = asrBottom
+      AnchorSideBottom.Control = Panel1
+      AnchorSideBottom.Side = asrBottom
+      Left = 420
+      Height = 13
+      Top = 15
+      Width = 69
+      Alignment = taCenter
+      Anchors = [akLeft, akBottom]
+      BorderSpacing.Left = 2
+      BorderSpacing.Right = 2
+      Caption = '0:00'
+      Constraints.MinWidth = 69
+      ParentColor = False
+      OnMouseDown = LTotTimeMouseDown
+    end
+    object SBDirection: TSpeedButton
+      AnchorSideLeft.Control = SBTools
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = SBTools
+      AnchorSideTop.Side = asrCenter
+      Left = 366
+      Height = 23
+      Top = 3
+      Width = 25
+      AutoSize = True
+      BorderSpacing.Left = 2
+      Constraints.MinHeight = 23
+      Constraints.MinWidth = 25
+      Spacing = -1
+      OnClick = SBDirectionClick
+      ShowCaption = False
+    end
+    object SBLoop: TSpeedButton
+      AnchorSideLeft.Control = SBDirection
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = SBDirection
+      AnchorSideTop.Side = asrCenter
+      Left = 393
+      Height = 23
+      Top = 3
+      Width = 25
+      AllowAllUp = True
+      AutoSize = True
+      BorderSpacing.Left = 2
+      Constraints.MinHeight = 23
+      Constraints.MinWidth = 25
+      Glyph.Data = {
+        7E000000424D7E000000000000003E0000002800000010000000100000000100
+        0100000000004000000010170000101700000200000000000000FFFFFF000000
+        000000000000000000000000000003C0000017E000001E3000001C1800001E00
+        000000780000183800000C78000007E8000003C0000000000000000000000000
+        0000
+      }
+      GroupIndex = 1
+      Spacing = -1
+      OnClick = SBLoopClick
+      ShowCaption = False
+    end
+    object LQtyCurTotal: TLabel
+      AnchorSideLeft.Control = SBLoop
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = Panel1
+      AnchorSideRight.Control = LTotTime
+      AnchorSideRight.Side = asrBottom
+      Left = 420
+      Height = 13
+      Top = 0
+      Width = 69
+      Alignment = taCenter
+      Anchors = [akLeft, akRight]
+      BorderSpacing.Left = 2
+      Caption = '0/0'
+      ParentColor = False
+    end
+  end
+  object ScBPLItems: TScrollBar
+    Left = 476
+    Height = 316
+    Top = 0
+    Width = 15
+    Align = alRight
+    Kind = sbVertical
+    PageSize = 0
+    TabOrder = 1
+    TabStop = False
+    OnScroll = ScBPLItemsScroll
+  end
+  object PopupMenu1: TPopupMenu
+    OnPopup = PopupMenu1Popup
+    Left = 48
+    Top = 240
+    object MenuItemAdjusting: TMenuItem
+      Caption = 'Item adjusting...'
+      OnClick = MenuItemAdjustingClick
+    end
+    object N4: TMenuItem
+      Caption = '-'
+    end
+    object MenuConvert: TMenuItem
+      Caption = 'Convert to'
+      object MenuPSG: TMenuItem
+        Caption = 'PSG...'
+        OnClick = MenuPSGClick
+      end
+      object MenuVTX: TMenuItem
+        Caption = 'VTX...'
+        OnClick = MenuVTXClick
+      end
+      object MenuYM6: TMenuItem
+        Caption = 'YM6...'
+        OnClick = MenuYM6Click
+      end
+      object MenuZXAY: TMenuItem
+        Caption = 'ZXAY...'
+        OnClick = MenuZXAYClick
+      end
+      object Separator2: TMenuItem
+        Caption = '-'
+      end
+      object MenuWAV: TMenuItem
+        Caption = 'WAV...'
+        OnClick = MenuWAVClick
+      end
+      object Separator3: TMenuItem
+        Caption = '-'
+      end
+      object MenuMP3: TMenuItem
+        Caption = 'MP3...'
+        OnClick = MenuMP3Click
+      end
+      object MenuOGG: TMenuItem
+        Caption = 'OGG...'
+        OnClick = MenuOGGClick
+      end
+      object MenuFLAC: TMenuItem
+        Caption = 'FLAC...'
+        OnClick = MenuFLACClick
+      end
+      object MenuOPUS: TMenuItem
+        Caption = 'OPUS...'
+        OnClick = MenuOPUSClick
+      end
+    end
+    object MenuOpenInEditor: TMenuItem
+      Caption = 'Open in editor'
+      OnClick = MenuOpenInEditorClick
+    end
+    object MenuSaveAs: TMenuItem
+      Caption = 'Save as...'
+      OnClick = MenuSaveAsClick
+    end
+  end
+  object ImageList1: TImageList
+    Left = 224
+    Top = 240
+    Bitmap = {
+      4C7A040000001000000010000000660000000000000078DAED95CD0A00200883
+      7DFF975E974E51B688B29F0D46207CE8C19999E408D9113C0AEFE4D1F00E1E1D
+      AFE625653E7AFF22F377C2FD39E1FE4AEFE698615B2F2658EBF0CCCC207A7B33
+      8DF0B59967FAB33CC8FA487F2CDE1949FFBFF8FBF9AF94004FD8C13F
+    }
+  end
+  object PopupMenu2: TPopupMenu
+    AutoPopup = False
+    Left = 136
+    Top = 240
+    object RandomSort: TMenuItem
+      Caption = 'Sort randomly'
+      OnClick = RandomSortClick
+    end
+    object ByauthorSort: TMenuItem
+      Caption = 'Sort by author'
+      OnClick = ByauthorSortClick
+    end
+    object BytitleSort: TMenuItem
+      Caption = 'Sort by title'
+      OnClick = BytitleSortClick
+    end
+    object ByfilenameSort: TMenuItem
+      Caption = 'Sort by file name'
+      OnClick = ByfilenameSortClick
+    end
+    object Byfiletype1: TMenuItem
+      Caption = 'Sort by file type'
+      OnClick = Byfiletype1Click
+    end
+    object N3: TMenuItem
+      Caption = '-'
+    end
+    object Finditem1: TMenuItem
+      Caption = 'Find item...'
+      ShortCut = 118
+      OnClick = Finditem1Click
+    end
+    object Deduplicate1: TMenuItem
+      Caption = 'Deduplicate'
+      OnClick = Deduplicate1Click
+    end
+    object Separator1: TMenuItem
+      Caption = '-'
+    end
+    object MenuConvertAll: TMenuItem
+      Caption = 'Convert all to'
+      object MIAllToPSG: TMenuItem
+        Caption = 'PSG...'
+        OnClick = MIAllToPSGClick
+      end
+      object MIAllToVTX: TMenuItem
+        Caption = 'VTX...'
+        OnClick = MIAllToVTXClick
+      end
+      object MenuItem5: TMenuItem
+        Caption = 'YM6...'
+        OnClick = MenuItem5Click
+      end
+      object MIAllToZXAY: TMenuItem
+        Caption = 'ZXAY...'
+        OnClick = MIAllToZXAYClick
+      end
+      object Separator4: TMenuItem
+        Caption = '-'
+      end
+      object MIAllToWAV: TMenuItem
+        Caption = 'WAV...'
+        OnClick = ConvToWAV1Click
+      end
+      object Separator5: TMenuItem
+        Caption = '-'
+      end
+      object MIAllToMP3: TMenuItem
+        Caption = 'MP3...'
+        OnClick = MIAllToMP3Click
+      end
+      object MIAllToOGG: TMenuItem
+        Caption = 'OGG...'
+        OnClick = MIAllToOGGClick
+      end
+      object MIAllToFLAC: TMenuItem
+        Caption = 'FLAC...'
+        OnClick = MIAllToFLACClick
+      end
+      object MIAllToOPUS: TMenuItem
+        Caption = 'OPUS...'
+        OnClick = MIAllToOPUSClick
+      end
+    end
+    object SaveToFolder1: TMenuItem
+      Caption = 'Save all to folder...'
+      OnClick = SaveToFolder1Click
+    end
+  end
+end

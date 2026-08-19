@@ -72,6 +72,38 @@ typedef struct atari_emulate {
                         * migration_debt.yaml). DMA sound's mixer-step
                         * divisor, see dma_sound_mix. */
 
+  /* atari.pas: VBLFreq - PER-FILE (SNDH's own PlayFreq tag,
+   * sndh_file.c's `vbl_freq = tags.play_freq`), previously only a local
+   * variable inside sndh_file_load and never persisted here. Stored so
+   * atari_emulate_set_mc68000_freq (MIG-0120, Mixer.pas's GBMCFrq
+   * override) can recompute vbl_period (atari.pas:1176's `round(
+   * MC68000Freq/VBLFreq)`) later without needing the file's tags
+   * re-derived from scratch. */
+  double vbl_freq;
+
+  /* Mixer.pas: GBMFPFrq's own MFPTimerMode/MFPTimerFrq (MIG-0120) -
+   * mode 0 = Auto (MFPTimerFrq recomputed from the loaded file's AY
+   * clock, MainWin.pas:1570's `Trunc(AY_Freq*16/13+0.5)`), mode 1 =
+   * manual override (MainWin.pas:1573-1577). Purely informational/
+   * display bookkeeping here - the actual effect on playback is entirely
+   * via mfp.mc_by_mfp, recomputed by atari_emulate_set_mfp_freq/
+   * atari_emulate_set_mc68000_freq whenever either the MFP frequency or
+   * the 68000 clock changes (MainWin.pas:1581,1645's `MCbyMFP :=
+   * MC68000Freq/MFPFreq`). */
+  int mfp_timer_mode;
+  double mfp_timer_freq; /* atari.pas: MFPFreq (Hz) */
+
+  /* Mixer.pas: GBSNDH's STRB/STeRB radio pair (MIG-0121) - true for an
+   * Atari STe (default, preserving this port's pre-existing behavior
+   * exactly - see atari_emulate_init's own comment), false for a plain
+   * Atari ST, which has NO DMA-sound hardware at all (atari.pas:1078-
+   * 1110's repeated `if STe then SetDataRegion(...)` for the $FF8900-
+   * $FF89FF region - a plain ST never maps it). Gates the DMA-sound
+   * callback-region registration in atari_emulate_init; read nowhere
+   * else (dma_sound.c's own mixing code is unconditional once the
+   * region exists to drive it, matching the original). */
+  bool is_ste;
+
   bool vbl_acked_this_exec; /* internal, set by the int_ack trampoline */
 
   /* atari.pas: bit 4 of Starscream's ctx(interrupts) pending-request
@@ -133,10 +165,55 @@ typedef struct atari_emulate {
  * `a`'s dma_sound. mc68000_freq/vbl_period/ay_freq are computed by the
  * caller from settings.pas-equivalent constants (see MainWin.pas:1580-1586
  * for the original's derivation: MC68000Freq = MainClockFreq/4, VBLPeriod
- * = round(MC68000Freq/VBLFreq)). */
+ * = round(MC68000Freq/VBLFreq)). vbl_freq is the same VBLFreq used to
+ * derive vbl_period, stored verbatim for a later atari_emulate_set_
+ * mc68000_freq call to reuse (MIG-0120, see vbl_freq's own struct
+ * comment). is_ste selects whether the DMA-sound ($FF8900-$FF89FF)
+ * region is mapped at all (MIG-0121, see is_ste's own struct comment) -
+ * every existing caller before this parameter existed behaved as if
+ * is_ste were true, so pass true to preserve exact prior behavior. mfp_
+ * timer_mode/mfp_timer_freq are seeded to Mixer.pas's own MFPTimerModeDef/
+ * an MFPFreq consistent with mfp_init's own MC_BY_MFP_DEFAULT seed
+ * (mc68000_freq * 4.0/13.0) - i.e. "Auto" in name only until a caller
+ * explicitly invokes atari_emulate_set_mfp_freq; mfp.mc_by_mfp itself is
+ * untouched by this function (mfp_init already seeded it), so default
+ * playback timing is bit-for-bit unchanged from before mc_by_mfp existed
+ * as a runtime field. */
 void atari_emulate_init(atari_emulate* a, uint8_t* mem, uint32_t mem_size,
                         ay_engine* ay, double mc68000_freq,
-                        int64_t vbl_period, double ay_freq);
+                        int64_t vbl_period, double ay_freq, double vbl_freq,
+                        bool is_ste);
+
+/* MainWin.pas: Set_MC68K_Frq (1636-1650) - a LOAD-TIME-ONLY 68000 clock
+ * override (MIG-0120; matches this port's own established convention for
+ * player_set_chip_freq/player_set_player_freq/player_set_number_of_
+ * channels of applying overrides once, right after a fresh load, not
+ * live mid-playback - see player_set_number_of_channels's own doc
+ * comment in player.h for the fuller rationale). Silently ignored if
+ * `freq` is outside MainWin.pas:1638's own [2000000, 16000000] guard
+ * range. Recomputes vbl_period (atari.pas:1176, using the vbl_freq
+ * stored at atari_emulate_init time), ay->frq_ay_by_frq_z80 (atari.pas's
+ * own FrqAyByFrqMC68000, `round(AyFreq/MC68000Freq/8*4294967296)`), and
+ * mfp.mc_by_mfp (`MC68000Freq/MFPFreq`, MainWin.pas:1645) from the
+ * CURRENTLY effective mfp_timer_freq - mirrors Set_MC68K_Frq's own three
+ * assignments exactly, in the same order. */
+void atari_emulate_set_mc68000_freq(atari_emulate* a, double freq);
+
+/* MainWin.pas: Set_MFP_Frq (1563-1585) - a LOAD-TIME-ONLY MFP timer
+ * frequency override (MIG-0120, same load-time-only rationale as
+ * atari_emulate_set_mc68000_freq above). `mode` 0 = Auto: `freq_hz` is
+ * ignored by this function (the caller - player_set_mfp_freq - computes
+ * the Auto value itself, `Trunc(AY_Freq*16/13+0.5)` via player_get_
+ * ay_freq, and passes the already-computed result here either way, so
+ * this function's own job is identical for both modes: just apply
+ * whatever frequency the caller decided on). `mode` 1 = manual: `freq_hz`
+ * must already be in MainWin.pas:1573's own [1000000, 4365292] range -
+ * out-of-range values, or any `mode` other than 0/1, leave mfp_timer_
+ * mode/mfp_timer_freq/mfp.mc_by_mfp completely untouched (matching
+ * Set_MFP_Frq's own if/else-if chain, which likewise does nothing at all
+ * outside those two cases). Recomputes mfp.mc_by_mfp = mc68000_freq/
+ * freq_hz (MainWin.pas:1581's `MCbyMFP := MC68000Freq/MFPFreq`). */
+void atari_emulate_set_mfp_freq(atari_emulate* a, int mode, double freq_hz);
 
 /* Mirrors Atari_Emulate (atari.pas:1436-1523): computes the bounded cycle
  * budget from the nearest upcoming VBL/MFP-timer/DMA-sample-boundary

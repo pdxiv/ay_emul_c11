@@ -176,12 +176,14 @@ int vtx_file_make_buffer(vtx_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0103: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
@@ -202,7 +204,7 @@ int vtx_file_make_buffer(vtx_file* f, int16_t* buf, int buffer_length) {
     } else {
       ay->int_flag = false;
     }
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0103: was hardcoded stereo16 */
     if (f->position_in_vtx == f->number_of_vbls)
       f->position_in_vtx = f->loop_vbl;
     if (f->global_tick_counter >= f->global_tick_max && !ay->int_flag) {
@@ -215,4 +217,26 @@ int vtx_file_make_buffer(vtx_file* f, int16_t* buf, int buffer_length) {
     }
   }
   return ay->buf_len;
+}
+
+bool vtx_file_step_registers(vtx_file* f) {
+  if (f->real_end_all) return false;
+  if (f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    } else {
+      f->real_end_all = true;
+      return false;
+    }
+  }
+  vtx_get_registers(f);
+  if (f->position_in_vtx == f->number_of_vbls) f->position_in_vtx = f->loop_vbl;
+  if (f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    } else {
+      f->real_end_all = true;
+    }
+  }
+  return true;
 }

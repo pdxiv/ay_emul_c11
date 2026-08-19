@@ -487,15 +487,28 @@ void ay_engine_init(ay_engine* e) {
   e->index_br = 170;
   e->index_cl = 13;
   e->index_cr = 255;
-  e->is_filt = -1; /* filtering disabled until the ALSA/mixer milestone wires
-                     * up real Filt_K coefficients - see migration_debt.yaml
-                     * and the is_filt field comment in ay.h. */
+  e->filter_quality = 1; /* MainWin.pas:926: SetFilter(1) at startup */
+  e->is_filt = -1; /* stays disabled until a caller with a real ay_freq/
+                     * sample_rate (player_set_chip_freq) actually computes
+                     * Filt_K - see migration_debt.yaml and the is_filt
+                     * field comment in ay.h. */
   ay_engine_reset_chip(e, true);
 }
 
-/* AY.pas:904-940, ResetAYChipEmulation (single-chip case only, see ay.h). */
+/* AY.pas:904-940+169, ResetAYChipEmulation(chip, zeroregs). The original
+ * takes an explicit chip index and is called for chip 1 only `if TSMode`
+ * (Players.pas:4066/14162/14169) - this port instead always resets chip2
+ * alongside chip here, unconditionally, regardless of ts_mode (MIG-0109).
+ * That's a superset of the original's behavior, not a divergence: chip2 is
+ * never read by any synthesizer path unless ts_mode is true, so resetting
+ * it "early" when ts_mode is still false is unobservable - it just
+ * guarantees chip2 is always in the same clean, deterministic state
+ * ResetAYChipEmulation(1,...) would have left it in, the moment ts_mode
+ * later gets turned on, without needing every ts_mode-setting call site to
+ * remember to reset chip2 itself. */
 void ay_engine_reset_chip(ay_engine* e, bool zeroregs) {
   ay_chip_reset(&e->chip, zeroregs);
+  ay_chip_reset(&e->chip2, zeroregs);
   e->prev_left = 0;
   e->prev_right = 0;
   e->left_chan = 0;
@@ -537,18 +550,26 @@ void ay_engine_init_vis(ay_engine* e, int sample_rate, double latency_seconds) {
  * ring buffer and advances the write cursor/next-trigger threshold.
  * Called from ay_synthesizer_stereo16's inner sample-writing loop (see
  * that function's own comment on exactly where/why). */
+static void ay_vis_capture_reg(ay_vis_reg* r, const ay_chip* c) {
+  r->tn_a = ay_reg_tona(c);
+  r->tn_b = ay_reg_tonb(c);
+  r->tn_c = ay_reg_tonc(c);
+  r->mix = c->reg[7];
+  r->amp_a = c->reg[8];
+  r->amp_b = c->reg[9];
+  r->amp_c = c->reg[10];
+  r->amp_e = c->ampl;
+  r->env_p = (int32_t)ay_reg_envelope(c);
+  r->env_t = c->reg[13];
+}
+
 static void ay_engine_fill_vis(ay_engine* e) {
   ay_vis_point* p = &e->vis_points[e->mk_vis_pos];
-  p->tn_a = ay_reg_tona(&e->chip);
-  p->tn_b = ay_reg_tonb(&e->chip);
-  p->tn_c = ay_reg_tonc(&e->chip);
-  p->mix = e->chip.reg[7];
-  p->amp_a = e->chip.reg[8];
-  p->amp_b = e->chip.reg[9];
-  p->amp_c = e->chip.reg[10];
-  p->amp_e = e->chip.ampl;
-  p->env_p = (int32_t)ay_reg_envelope(&e->chip);
-  p->env_t = e->chip.reg[13];
+  ay_vis_capture_reg(&p->r[0], &e->chip);
+  /* AY.pas:602-603: `if TSMode then with VisPoints[MkVisPos].R[1],
+   * SoundChip[1].RegisterAY do ...` - r[1] is only captured when TSMode is
+   * active at capture time (MIG-0110). */
+  if (e->ts_mode) ay_vis_capture_reg(&p->r[1], &e->chip2);
   p->calc = false;
 
   e->mk_vis_pos++;
@@ -582,22 +603,33 @@ static void ay_vis_calc_channel(int32_t* tn, int32_t* amp, int32_t env_t,
   *tn = t;
 }
 
-static void ay_vis_calc(ay_vis_point* p) {
-  int32_t e_val;
-  switch (p->env_t) {
-    case 8: case 12: e_val = 28; break;
-    case 10: case 14: e_val = 26; break;
-    default:
-      e_val = p->amp_e - 1;
-      if (e_val < 0) e_val = 0;
-      break;
+/* AY.pas:5308-5344's AYVisualisation, the outer `for i := 0 to 1 do ...
+ * if not TSMode then break` loop (MIG-0110): r[0] is always processed;
+ * r[1] is processed too, but only if ts_mode is true right now, at READ
+ * time - not whatever it was when this point was captured (see
+ * ay_vis_point's own comment on the resulting, faithfully-reproduced
+ * quirk). */
+static void ay_vis_calc(ay_vis_point* p, bool ts_mode) {
+  int i;
+  for (i = 0; i < 2; i++) {
+    ay_vis_reg* r = &p->r[i];
+    int32_t e_val;
+    switch (r->env_t) {
+      case 8: case 12: e_val = 28; break;
+      case 10: case 14: e_val = 26; break;
+      default:
+        e_val = r->amp_e - 1;
+        if (e_val < 0) e_val = 0;
+        break;
+    }
+    ay_vis_calc_channel(&r->tn_a, &r->amp_a, r->env_t, r->env_p, e_val,
+                        (r->mix & 1) == 0);
+    ay_vis_calc_channel(&r->tn_b, &r->amp_b, r->env_t, r->env_p, e_val,
+                        (r->mix & 2) == 0);
+    ay_vis_calc_channel(&r->tn_c, &r->amp_c, r->env_t, r->env_p, e_val,
+                        (r->mix & 4) == 0);
+    if (!ts_mode) break;
   }
-  ay_vis_calc_channel(&p->tn_a, &p->amp_a, p->env_t, p->env_p, e_val,
-                      (p->mix & 1) == 0);
-  ay_vis_calc_channel(&p->tn_b, &p->amp_b, p->env_t, p->env_p, e_val,
-                      (p->mix & 2) == 0);
-  ay_vis_calc_channel(&p->tn_c, &p->amp_c, p->env_t, p->env_p, e_val,
-                      (p->mix & 4) == 0);
   p->calc = true;
 }
 
@@ -606,12 +638,26 @@ const ay_vis_point* ay_engine_get_vis_point(ay_engine* e, uint32_t smp) {
   uint32_t cur_vis_pos = (smp % e->vis_tick_max) / e->vis_step;
   if (cur_vis_pos >= e->vis_pos_max) cur_vis_pos = e->vis_pos_max - 1;
   ay_vis_point* p = &e->vis_points[cur_vis_pos];
-  if (!p->calc) ay_vis_calc(p);
+  if (!p->calc) ay_vis_calc(p, e->ts_mode);
   return p;
 }
 
 /* AY.pas:942-1008, Calculate_Level_Tables (single-chip / no Turbosound,
  * see ay.h for scope). */
+/* AY.pas:1018-1032 - see ay.h's own doc comment. */
+int ay_engine_get_max_level(const ay_engine* e) {
+  int max = 0;
+  for (int i = 31; i >= 0; i--) {
+    int l = e->level_al[i] + e->level_bl[i] + e->level_cl[i];
+    if (l > max) max = l;
+    if (e->number_of_channels == 2) {
+      l = e->level_ar[i] + e->level_br[i] + e->level_cr[i];
+      if (l > max) max = l;
+    }
+  }
+  return max;
+}
+
 void ay_engine_calculate_level_tables(ay_engine* e) {
   int index_a, index_b, index_c;
   int l, r;
@@ -711,22 +757,26 @@ void ay_synthesizer_ay(ay_engine* e, int64_t current_tact) {
   } else {
     e->int_flag = false;
   }
-  /* AY.pas dispatches through a `Synthesizer` proc-pointer set by the
-   * caller to one of Stereo16/Stereo8/Mono16/Mono8 depending on output
-   * format; the dispatch is inlined here instead of a function-pointer
-   * table. e->buf == NULL lets standalone callers (e.g. this milestone's
-   * fidelity/differential harnesses) drive ay_synthesizer_ay for its tick
-   * bookkeeping alone, without an output buffer wired up yet. */
-  if (e->buf != NULL) {
-    if (e->sample_bits == 16 && e->number_of_channels == 2) {
-      ay_synthesizer_stereo16(e);
-    } else if (e->sample_bits == 16) {
-      ay_synthesizer_mono16(e);
-    } else if (e->sample_bits == 8 && e->number_of_channels == 2) {
-      ay_synthesizer_stereo8(e);
-    } else if (e->sample_bits == 8) {
-      ay_synthesizer_mono8(e);
-    }
+  ay_synthesizer_dispatch(e);
+}
+
+/* MainWin.pas: SetSynthesizer's own dispatch (~1746-1759) - see ay.h's
+ * own comment on why this was factored out as its own function
+ * (MIG-0107) rather than left inlined only inside ay_synthesizer_ay.
+ * e->buf == NULL is a no-op, matching ay_synthesizer_ay's original
+ * inlined guard (lets standalone callers, e.g. this milestone's
+ * fidelity/differential harnesses, drive tick bookkeeping alone without
+ * an output buffer wired up yet). */
+void ay_synthesizer_dispatch(ay_engine* e) {
+  if (e->buf == NULL) return;
+  if (e->sample_bits == 16 && e->number_of_channels == 2) {
+    ay_synthesizer_stereo16(e);
+  } else if (e->sample_bits == 16) {
+    ay_synthesizer_mono16(e);
+  } else if (e->sample_bits == 8 && e->number_of_channels == 2) {
+    ay_synthesizer_stereo8(e);
+  } else if (e->sample_bits == 8) {
+    ay_synthesizer_mono8(e);
   }
 }
 
@@ -819,6 +869,17 @@ void ay_synthesizer_stereo16(ay_engine* e) {
     }
     ay_chip_synthesizer_logic_q(&e->chip);
     ay_chip_synthesizer_mixer_q(&e->chip, e, &level_l, &level_r);
+    /* AY.pas:658-663 `if TSMode then begin SoundChip[1].Synthesizer_Logic_Q;
+     * SoundChip[1].Synthesizer_Mixer_Q; end` (MIG-0109) - chip 1's
+     * contribution is simply ADDED into the same level_l/level_r
+     * accumulator chip 0 already wrote into, via mixer_q's own `+=` tail.
+     * This genuinely double-counts e->beeper (mixer_q always starts from
+     * e->beeper) when ts_mode is set - a real, verified quirk of the
+     * original, not a bug to guard against here. */
+    if (e->ts_mode) {
+      ay_chip_synthesizer_logic_q(&e->chip2);
+      ay_chip_synthesizer_mixer_q(&e->chip2, e, &level_l, &level_r);
+    }
     if (e->is_filt >= 0) {
       int saved_i = e->filt_i;
       level_l = ay_apply_filter(level_l, e->filt_xl, e->filt_k, e->filt_m,
@@ -899,6 +960,12 @@ void ay_synthesizer_mono16(ay_engine* e) {
     }
     ay_chip_synthesizer_logic_q(&e->chip);
     ay_chip_synthesizer_mixer_q_mono(&e->chip, e, &level_l);
+    /* AY.pas TSMode dual-chip mixing (MIG-0109) - see
+     * ay_synthesizer_stereo16's matching comment for the full citation. */
+    if (e->ts_mode) {
+      ay_chip_synthesizer_logic_q(&e->chip2);
+      ay_chip_synthesizer_mixer_q_mono(&e->chip2, e, &level_l);
+    }
     if (e->is_filt >= 0) {
       level_l = ay_apply_filter(level_l, e->filt_xl, e->filt_k, e->filt_m,
                                  &e->filt_i);
@@ -950,6 +1017,12 @@ void ay_synthesizer_stereo8(ay_engine* e) {
     }
     ay_chip_synthesizer_logic_q(&e->chip);
     ay_chip_synthesizer_mixer_q(&e->chip, e, &level_l, &level_r);
+    /* AY.pas TSMode dual-chip mixing (MIG-0109) - see
+     * ay_synthesizer_stereo16's matching comment for the full citation. */
+    if (e->ts_mode) {
+      ay_chip_synthesizer_logic_q(&e->chip2);
+      ay_chip_synthesizer_mixer_q(&e->chip2, e, &level_l, &level_r);
+    }
     if (e->is_filt >= 0) {
       int saved_i = e->filt_i;
       level_l = ay_apply_filter(level_l, e->filt_xl, e->filt_k, e->filt_m,
@@ -1004,6 +1077,12 @@ void ay_synthesizer_mono8(ay_engine* e) {
     }
     ay_chip_synthesizer_logic_q(&e->chip);
     ay_chip_synthesizer_mixer_q_mono(&e->chip, e, &level_l);
+    /* AY.pas TSMode dual-chip mixing (MIG-0109) - see
+     * ay_synthesizer_stereo16's matching comment for the full citation. */
+    if (e->ts_mode) {
+      ay_chip_synthesizer_logic_q(&e->chip2);
+      ay_chip_synthesizer_mixer_q_mono(&e->chip2, e, &level_l);
+    }
     if (e->is_filt >= 0) {
       level_l = ay_apply_filter(level_l, e->filt_xl, e->filt_k, e->filt_m,
                                  &e->filt_i);

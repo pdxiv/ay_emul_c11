@@ -146,10 +146,15 @@ file=<path> format=<FORMAT> subtype=<value|none> version=<n|unknown> chips=<n|un
   apply to that format.
 - `confidence`:
   - `definite` - a real content signature matched (Tier B/C, or Tier A
-    with a signature that also happened to match).
+    with a signature that also happened to match), or a Tier C structural
+    match additionally passed the `IntegrityCheck` confirmation step (see
+    "Known limitations" - all seventeen structural-tracker formats have
+    this now, though `ST1`/`ST3`/`STF` specifically have not been
+    oracle-validated against a real file, since none exists).
   - `probable` - the format came from a trusted-but-unverified extension
     (Tier A/B) and either has no content signature to check at all, or its
-    signature check could not be run to completion.
+    signature check could not be run to completion; or a Tier C structural
+    match succeeded for a format that has no `IntegrityCheck` port yet.
   - `unknown` - `format=unknown`.
 - `malformed=yes` marks files that were successfully read but whose content
   contradicts a genuine *structural* requirement of the format (truncated
@@ -201,49 +206,71 @@ back.
 
 ## Known limitations / differences from Pascal behaviour
 
-- **The ten structural-only tracker detectors (`ST1`, `ST3`, `ASC`,
-  `ASC0`, `STF`, `STP`, `PT1`, `PT2`, `SQT`, `FLS`) only check the
-  candidate window anchored at file offset 0**, not Players.pas's true
-  sliding scan across every byte offset in the file. `Module_Detector`'s
-  real sliding scan exists to find tracker data embedded anywhere in a
-  file (e.g. inside a TRD/SCL disk image, or after a BASIC loader);
-  reproducing that for these ten substantially heavier structural checks
-  (one of which - `STF` - runs a full custom depacker) would mean
-  re-running each of them at every byte offset of a potentially large
-  file, which is disproportionate for an identification tool. Standalone
-  extensionless tracker files (the common real case) start their data at
-  offset 0, so this still covers the vast majority of cases; the
-  "embedded inside a disk image" sub-case is not detected. Tracked in
-  `migration_debt.yaml` as `MIG-0023` (`state: translated` - ported and
-  fuzz-tested for safety, but not oracle-diff-validated against the real
-  binary. `test_corpus_76/` now contains real sample files for 7 of these
-  10 formats, making that re-verification newly possible, but it has not
-  been done - see MIG-0023's rationale for the current state).
-- **These same ten detectors also skip the final `IntegrityCheck`
-  confirmation step** Pascal performs after every structural check passes
-  (a `LoadTrackerModule`+`GetTimeXXX` call that computes a playable
-  duration and rejects the candidate if it comes back zero) - this
-  requires the full tracker-loading/playback engine this tool
-  deliberately does not implement. A small number of files that pass
-  every structural check here but would still be rejected by that final
-  step may be reported as detected where real Pascal (extensionless input
-  only) would not.
-- **`ST3`'s "Id"-prefixed variant and `STP`'s `Init_Id=0` branch skip a
-  secondary tag-string comparison** (`KsaId`/`StcId`) Pascal performs in
-  addition to the pointer-arithmetic checks - noted inline in
-  `detect_st_family.c`. The primary structural gate (which does the actual
-  discriminating work) is otherwise ported in full.
-- **`Module_Detector`'s fallback for STC/PSC/FTC/GTR (when the extension is
-  missing/unrecognised) is a best-effort approximation**, not a byte-for-
-  byte port: the real Pascal function slides a window over the whole file
-  re-running the full structural `FoundXXX` check at every offset; this
-  tool instead searches directly for each signature string and checks the
-  surrounding fixed-offset fields relative to where it was found. For
-  every real-world case tested this is equivalent (both are looking for
-  the same fixed-relative-offset byte pattern occurring anywhere in the
-  file), but it is not a proven identical algorithm, so such matches are
-  reported with `confidence=probable`, not `definite`. Note `PT3` gets the
-  same treatment via `scan_whole_file_for_pt3` in `detect_pt3.c`.
+- **`Module_Detector`'s fallback is now a genuine byte-by-byte sliding
+  scan** (`scan_whole_file_module_detector` in `dispatch.c`): for
+  extensionless/unrecognised-extension input, all seventeen structural
+  detectors (`ST1`, `ST3`, `STC`, `ASC`, `ASC0`, `STF`, `STP`, `PT2`,
+  `PT3`x2, `PSC`x2, `FTC`, `PT1`, `GTR`, `SQT`, `FLS`) are re-run at
+  *every* candidate byte offset in the file, in Pascal's exact order,
+  matching `Module_Detector`'s own `repeat Inc(F_Offset) ... until
+  May_Quit or (F_Offset >= FilSiz)` loop - so tracker data embedded
+  anywhere in a file (e.g. inside a TRD/SCL disk image, or after a BASIC
+  loader) is now found, not just data starting at offset 0. `STC`,
+  `PSC`, `FTC`, `GTR` and `PT3` are now backed by genuine structural
+  ports of `FoundSTC`/`FoundPSC`/`FoundFTC`/`FoundGTR`/`FoundPT3` too -
+  an earlier version of this tool substituted a direct search for
+  `Ay_Emul.fmt`'s `match=` signature strings for these five, believing it
+  "equivalent in practice" to Pascal's real check; tracing every
+  reference to those fields through `filetypes.pas` showed they are
+  consumed only by its desktop shared-mime-info XML writer, never by
+  `AddFile`/`Module_Detector` - so that substitution was never actually
+  equivalent, just coincidentally close on typical files. See
+  `migration_debt.yaml`'s `MIG-0023b` for the full account.
+  **The final `IntegrityCheck` confirmation step is now performed for
+  ALL SEVENTEEN formats.** This tool links against `engine/libayengine.a`
+  (a deliberate reversal of an earlier "no engine dependency" design - see
+  the Makefile's own comment) and reuses its already oracle-validated
+  per-format `GetTimeXXX` duration-precompute ports (`migration_debt.yaml`
+  `MIG-0023b`/`MIG-0101`/`MIG-0103`/`MIG-0104`) instead of re-deriving the
+  same Pascal logic a second time. 12 formats (`STC`, `ASC`, `ASC0`,
+  `STP`, `PT2`, `PT3`, `PSC`, `FTC`, `PT1`, `GTR`, `FLS`, `SQT`) have their
+  own `engine/` port; `ST1`/`ST3`/`STF` have none of their own but reuse
+  `STC`'s/`STP`'s via a small converter (`st_convert.h`, `MIG-0105`),
+  exactly mirroring `LoadTrackerModule`'s own real dispatch
+  (`Players.pas:2547-2558`: `ST1`/`ST3` convert to `STC`'s layout, `STF`
+  converts to `STP`'s). A structural match is now provisional for all
+  seventeen: it's only accepted once `engine/`'s real loader + duration
+  computation also confirms a nonzero playable duration, exactly
+  mirroring `LoadTrackerModule`+`GetTimeXXX`'s role in every real
+  `FoundXXX`. On confirmation, `confidence` upgrades to `definite`
+  (Pascal never reports a `Module_Detector` match that failed
+  `IntegrityCheck` at all); on rejection, the sliding scan continues
+  trying the remaining formats at that offset, then the next offset,
+  matching Pascal's real control flow exactly.
+  **Important asterisk on `ST1`/`ST3`/`STF` specifically**: unlike the
+  other 14 formats, there are zero real `.st1`/`.st3`/`.stf` sample files
+  anywhere in this repo, so this trio's `IntegrityCheck` path has NOT been
+  validated against a real file run through the original Pascal program -
+  only against hand-constructed synthetic files and manual byte-tracing.
+  See `st_convert.h`'s file comment and `migration_debt.yaml`'s
+  `MIG-0105` for the full account; it's recorded there as
+  `behaviorally_incomplete`, not `translated`/`validated`, specifically
+  because that verification gap has no path to closing without a real
+  sample file turning up.
+  `MIG-0105`'s corpus cross-check (52/53 real sample files, spanning 15
+  of the 17 formats - `ST1`/`ST3`/`STF` remain unrepresented in the
+  corpus itself, hence the asterisk above) is the current best evidence
+  of correctness for the other 14; a true oracle-diff of the FULL
+  sliding-scan-plus-IntegrityCheck pipeline (as opposed to each piece
+  validated separately, which is what's actually been done) was
+  attempted and could not be completed (see `MIG-0023b`'s verification
+  note for why) and remains open follow-up work.
+- **`ST3`'s "Id"-prefixed variant, `STP`'s `Init_Id=0` branch, and `STC`'s
+  own "Id"-prefixed variant skip a secondary tag-string comparison**
+  (`KsaId`/`StcId`) Pascal performs in addition to the pointer-arithmetic
+  checks - noted inline in `detect_st_family.c` and
+  `detect_signature_trackers.c`. The primary structural gate (which does
+  the actual discriminating work) is otherwise ported in full.
 - **`FXM` and `PSM` are Tier-A-only** (reachable only via a recognised
   `.fxm`/`.psm` extension), even though `Ay_Emul.fmt` gives them byte
   signatures: a full read of `Module_Detector`'s body confirms it never

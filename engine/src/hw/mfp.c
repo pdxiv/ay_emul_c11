@@ -37,8 +37,12 @@ static void trace_log_timera(int64_t cycle, const char* event, int value,
 /* atari.pas:93 */
 static const int MFP_KOEFS[8] = {0, 4, 10, 16, 50, 64, 100, 200};
 /* atari.pas:44,1580-1586: MCbyMFP = MC68000Freq/MFPFreq =
- * (ClockFreq/4)/(ClockFreq/13) = 13/4 exactly, independent of ClockFreq. */
-static const double MC_BY_MFP = 13.0 / 4.0;
+ * (ClockFreq/4)/(ClockFreq/13) = 13/4 exactly, independent of ClockFreq -
+ * this is mfp_init's own seed value for mfp::mc_by_mfp below (MIG-0120);
+ * the compile-time constant itself is kept only as that seed's
+ * documented derivation, no longer read directly by get_mfp_delay/
+ * calc_timer_cnt (see mfp.h's own comment on mc_by_mfp). */
+static const double MC_BY_MFP_DEFAULT = 13.0 / 4.0;
 
 /* Register indices, matching MFP_Registers' field order (atari.pas:111-140). */
 enum {
@@ -57,13 +61,14 @@ enum {
 static int64_t expand_timer_dr(uint8_t dr) { return dr != 0 ? dr : 256; }
 
 /* atari.pas:361-364 */
-static int64_t get_mfp_delay(uint8_t dm, int64_t dr) {
-  return (int64_t)((double)dr * MFP_KOEFS[dm] * MC_BY_MFP);
+static int64_t get_mfp_delay(uint8_t dm, int64_t dr, double mc_by_mfp) {
+  return (int64_t)((double)dr * MFP_KOEFS[dm] * mc_by_mfp);
 }
 
 void mfp_init(mfp* m) {
   memset(m, 0, sizeof(*m));
 
+  m->mc_by_mfp = MC_BY_MFP_DEFAULT;
   m->reg[REG_VCR] = 0x40; /* atari.pas:1344, Atari_InitEmu's reset default */
 
   m->timers[0].v = 13; m->timers[0].ipx_index = REG_IPA;
@@ -101,9 +106,9 @@ void mfp_init(mfp* m) {
 
 /* atari.pas:366-372. `od` is the current cycle count (caller-supplied,
  * matching s68000readOdometer's role). */
-static int64_t calc_timer_cnt(mfp_timer* t, int64_t od) {
+static int64_t calc_timer_cnt(mfp_timer* t, int64_t od, double mc_by_mfp) {
   if (t->dm != 0) {
-    double period = MFP_KOEFS[t->dm] * MC_BY_MFP;
+    double period = MFP_KOEFS[t->dm] * mc_by_mfp;
     int64_t elapsed_periods = (int64_t)((double)(od - t->base) / period);
     t->cnt = t->dr - (elapsed_periods % t->dr);
   }
@@ -120,18 +125,19 @@ static void set_timer_data_register(mfp* m, mfp_timer* t, uint8_t value) {
 }
 
 /* atari.pas:384-404. `od` is the current cycle count. */
-static void set_timer_delay_mode(mfp_timer* t, uint8_t new_dm, int64_t od) {
+static void set_timer_delay_mode(mfp_timer* t, uint8_t new_dm, int64_t od,
+                                  double mc_by_mfp) {
   if (new_dm == 0) {
-    calc_timer_cnt(t, od);
+    calc_timer_cnt(t, od, mc_by_mfp);
     t->delay = 0;
     t->dm = 0;
   } else if (new_dm != t->dm) {
-    t->delay = get_mfp_delay(new_dm, t->dr);
+    t->delay = get_mfp_delay(new_dm, t->dr, mc_by_mfp);
     if (t->dm != 0) {
       t->base = od - (int64_t)((double)(od - t->base) *
                                 (MFP_KOEFS[new_dm] / (double)MFP_KOEFS[t->dm]));
     } else {
-      t->base = od - get_mfp_delay(new_dm, t->dr - t->cnt);
+      t->base = od - get_mfp_delay(new_dm, t->dr - t->cnt, mc_by_mfp);
     }
     t->dm = new_dm;
   }
@@ -182,19 +188,19 @@ static void set_mfp_register(mfp* m, int num, uint8_t value, int64_t od) {
       mfp_timer* t0 = &m->timers[0];
       trace_log_timera(od, "write_tac_before", value, t0->dm, t0->dr,
                         t0->base, t0->delay, t0->ie, t0->im);
-      set_timer_delay_mode(t0, value & 7, od);
+      set_timer_delay_mode(t0, value & 7, od, m->mc_by_mfp);
       m->reg[REG_TAC] = value;
       trace_log_timera(od, "write_tac_after", value, t0->dm, t0->dr,
                         t0->base, t0->delay, t0->ie, t0->im);
       break;
     }
     case REG_TBC:
-      set_timer_delay_mode(&m->timers[1], value & 7, od);
+      set_timer_delay_mode(&m->timers[1], value & 7, od, m->mc_by_mfp);
       m->reg[REG_TBC] = value;
       break;
     case REG_TDC:
-      set_timer_delay_mode(&m->timers[2], (value >> 4) & 7, od);
-      set_timer_delay_mode(&m->timers[3], value & 7, od);
+      set_timer_delay_mode(&m->timers[2], (value >> 4) & 7, od, m->mc_by_mfp);
+      set_timer_delay_mode(&m->timers[3], value & 7, od, m->mc_by_mfp);
       m->reg[REG_TDC] = value;
       break;
     case REG_TAD: {
@@ -222,10 +228,10 @@ uint8_t mfp_read_byte_at(mfp* m, uint32_t address, int64_t od) {
   if ((address & 1) == 0) return 0;
   int i = (int)((address - 0xFFFA01) / 2);
   switch (i) {
-    case 15: return (uint8_t)calc_timer_cnt(&m->timers[0], od);
-    case 16: return (uint8_t)calc_timer_cnt(&m->timers[1], od);
-    case 17: return (uint8_t)calc_timer_cnt(&m->timers[2], od);
-    case 18: return (uint8_t)calc_timer_cnt(&m->timers[3], od);
+    case 15: return (uint8_t)calc_timer_cnt(&m->timers[0], od, m->mc_by_mfp);
+    case 16: return (uint8_t)calc_timer_cnt(&m->timers[1], od, m->mc_by_mfp);
+    case 17: return (uint8_t)calc_timer_cnt(&m->timers[2], od, m->mc_by_mfp);
+    case 18: return (uint8_t)calc_timer_cnt(&m->timers[3], od, m->mc_by_mfp);
     default:
       return (i >= 0 && i < 24) ? m->reg[i] : 0;
   }
@@ -330,7 +336,7 @@ int64_t mfp_emulate_timer(mfp* m, int idx, int64_t od) {
     if (t->ie) request_level6(m, t, od);
     t->base += t->delay;
     t->dr = expand_timer_dr(m->reg[t->txd_index]);
-    t->delay = get_mfp_delay(t->dm, t->dr);
+    t->delay = get_mfp_delay(t->dm, t->dr, m->mc_by_mfp);
     if (idx == 0) {
       trace_log_timera(od, "expire_after", 0, t->dm, t->dr, t->base,
                         t->delay, t->ie, t->im);

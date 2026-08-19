@@ -266,3 +266,98 @@ bool detect_sqt_structural(const filebuf* f, detection* d) {
   d->chips = 1;
   return true;
 }
+
+/* Players.pas:5969-6088 FoundPSC(PSC1_00), minus the final IntegrityCheck
+ * step and the MusicName[8] variant-marker mutation (only applied on
+ * success to the module's own in-memory copy for later re-save, not
+ * needed for detection). ModTypes variant 7 (Players.pas:145-150):
+ * PSC_MusicName@0(69 chars, unused for detection) PSC_UnknownPointer@69
+ * (word, unused) PSC_PatternsPointer@71(word) PSC_Delay@73(byte, unused)
+ * PSC_OrnamentsPointer@74(word) PSC_SamplesPointers[0..31]@76(word*32).
+ * PSC1_00 selects the "PSC v1.00" pointer-base convention (SamBase=0) vs
+ * the later-format convention (SamBase=$4c=76) - both variants are tried
+ * by the sliding scan, matching Players.pas:5961-5972's two back-to-back
+ * FoundPSC(False,...)/FoundPSC(True,...) calls. All locals in the
+ * original are `integer` (signed) - see detect_signature_trackers.c's
+ * file comment for the general Readen1/word-wraparound convention used
+ * across these structural ports. */
+bool detect_psc_structural(const filebuf* f, bool psc1_00, detection* d) {
+  long r = (long)f->size - 1;
+  if (r < 0x4c + 2) return false;
+  if (!in_bounds(f, 74, 2)) return false;
+  long orn_ptr = le16_at(f, 74);
+  if (orn_ptr >= r) return false;
+  if (orn_ptr < 0x4c + 2) return false;
+  if (orn_ptr > 64 + 0x4c) return false;
+  if (orn_ptr % 2 != 0) return false;
+
+  long sam_base = psc1_00 ? 0 : 0x4c;
+  if (!in_bounds(f, 76, 2)) return false;
+  long j = sam_base + (long)le16_at(f, 76);
+  if (j > orn_ptr + 64) return false;
+  if (j + 5 > r) return false;
+
+  if (!in_bounds(f, (size_t)orn_ptr, 2)) return false;
+  long orn_first = le16_at(f, (size_t)orn_ptr);
+  if (!psc1_00) orn_first += orn_ptr;
+  if (orn_first > 65535) return false;
+  if (orn_first >= r) return false;
+
+  if (!in_bounds(f, (size_t)orn_ptr - 2, 2)) return false;
+  long j2 = (long)le16_at(f, (size_t)orn_ptr - 2) + sam_base;
+  if (j2 > 65534 - 5) return false;
+  if (j2 + 5 > r) return false;
+  if (orn_first - j2 < 8) return false;
+  if ((orn_first - j2) % 6 != 2) return false;
+
+  long j1 = (long)le16_at(f, 76) + sam_base + 4;
+  while (j1 < 65536 && j1 <= r) {
+    if (!in_bounds(f, (size_t)j1, 1)) return false;
+    if ((byte_at(f, (size_t)j1) & 32) == 0) break;
+    j1 += 6;
+  }
+  if (j1 > 65534) return false;
+  if (j1 > r) return false;
+
+  if (!in_bounds(f, 71, 2)) return false;
+  long patterns_ptr = le16_at(f, 71);
+  if (orn_ptr - 0x4c - 2 > 0) {
+    if (!in_bounds(f, 78, 2)) return false; /* SamplesPointers[1] */
+    if (j1 + 3 != (long)le16_at(f, 78) + sam_base) return false;
+  } else {
+    if (j1 + 4 != orn_first) return false;
+  }
+
+  long jp = patterns_ptr + 11;
+  if (jp > 65535 || jp > r) return false;
+  jp -= 10;
+  if (!in_bounds(f, (size_t)jp, 1) || byte_at(f, (size_t)jp) == 255) return false;
+
+  long j1b = 0;
+  for (;;) {
+    if (!in_bounds(f, (size_t)jp + 1, 2)) return false;
+    long ja = le16_at(f, (size_t)jp + 1);
+    if (ja <= orn_first || ja >= patterns_ptr) return false;
+    if (!in_bounds(f, (size_t)jp + 3, 2)) return false;
+    long jb = le16_at(f, (size_t)jp + 3);
+    if (jb <= orn_first || jb >= patterns_ptr) return false;
+    if (!in_bounds(f, (size_t)jp + 5, 2)) return false;
+    long jc = le16_at(f, (size_t)jp + 5);
+    if (jc <= orn_first || jc >= patterns_ptr) return false;
+
+    jp += 8;
+    j1b++;
+    if (!in_bounds(f, (size_t)jp, 1)) return false;
+    if (byte_at(f, (size_t)jp) == 255) {
+      if (!in_bounds(f, (size_t)jp - 1, 1)) return false;
+      if (byte_at(f, (size_t)jp - 1) >= j1b) return false;
+      break;
+    }
+    if (jp > 65532 || jp + 2 > r) return false;
+  }
+
+  d->format = "PSC";
+  d->confidence = "probable";
+  d->chips = 1;
+  return true;
+}

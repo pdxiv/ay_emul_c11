@@ -9,8 +9,10 @@
  *     this path, so it's fully testable in headless/CI environments).
  *   --seconds=N (default 180): upper bound on render duration. AY has no
  *     natural "song ended" concept (see ay_file.h) so this is the only
- *     stop condition for it; YM/SNDH/VTX/PT3 may also stop earlier via
- *     their own real_end_all flag (MIG-0079/0100/0101).
+ *     stop condition for it; every other supported format (YM/SNDH/VTX/
+ *     PT3, plus PT1/PT2/GTR/FLS/STC/STP/FXM/PSM/ASC/ASC0/FTC/PSC/SQT as
+ *     of MIG-0108) may also stop earlier via its own real_end_all flag
+ *     (MIG-0079/0100/0101/0108).
  *   --ignore-end: sets the loaded format's do_loop flag (player_set_
  *     do_loop) so it never stops or truncates a buffer early on its own
  *     natural end, always rendering the full --seconds/--frames bound -
@@ -19,10 +21,13 @@
  *     PT3 with a sentinel Global_Tick_Max (GetTimePT3 wasn't ported
  *     when that harness was written, and it's the read-only Pascal
  *     oracle - never edited to keep pace, see this repo's own standing
- *     rule). This matches that same "ignore natural end, always render
- *     exactly N frames" behavior for a byte-for-byte comparison,
- *     without weakening real_end_all's own default-on behavior for
- *     actual playback (gui/src/playback.c never passes this flag).
+ *     rule); MIG-0108 confirmed the same sentinel pattern in all 12 of
+ *     the newly-wired formats' own OracleHarness.pas scenarios, needing
+ *     the same fix (see tests/oracle_diff/corpus_wav_md5_sweep.sh).
+ *     This matches that same "ignore natural end, always render exactly
+ *     N frames" behavior for a byte-for-byte comparison, without
+ *     weakening real_end_all's own default-on behavior for actual
+ *     playback (gui/src/playback.c never passes this flag).
  */
 #include <stdbool.h>
 #include <stdio.h>
@@ -96,7 +101,8 @@ static int render_to_wav(player* p, const char* wav_path, int max_frames) {
 
 static int play_via_alsa(player* p, int max_frames) {
   alsa_output* out;
-  alsa_output_status ast = alsa_output_open(&out, CHANNELS, SAMPLE_RATE);
+  alsa_output_status ast =
+      alsa_output_open(&out, NULL, CHANNELS, SAMPLE_RATE, 16, 200, 3);
   if (ast != ALSA_OUTPUT_OK) return 1;
 
   int16_t buf[BUFFER_FRAMES * CHANNELS];

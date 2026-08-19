@@ -769,12 +769,14 @@ int ym_file_make_buffer(ym_file* f, int16_t* buf, int buffer_length) {
   ay->buf = buf;
   ay->buf_len = 0;
   ay->buffer_length = buffer_length;
-  ay->number_of_channels = 2;
+  /* See fxm_file.c's make_buffer for why number_of_channels is not
+   * reset here (player_set_number_of_channels's load-time override
+   * must persist across buffer-fill calls). */
   ay->sample_bits = 16;
 
   if (ay->int_flag) {
     ay->int_flag = false;
-    ay_synthesizer_stereo16(ay);
+    ay_synthesizer_dispatch(ay); /* MIG-0103: was hardcoded stereo16 */
   }
   if (ay->int_flag) return ay->buf_len;
 
@@ -799,7 +801,7 @@ int ym_file_make_buffer(ym_file* f, int16_t* buf, int buffer_length) {
     }
     ym6_extra_get_registers(f);
     if ((ay->number_of_tiks >> 32) != 0) {
-      ay_synthesizer_stereo16(ay);
+      ay_synthesizer_dispatch(ay); /* MIG-0103: was hardcoded stereo16 */
     }
     if (f->global_tick_counter >= f->global_tick_max && !ay->int_flag) {
       if (f->do_loop) {
@@ -811,4 +813,46 @@ int ym_file_make_buffer(ym_file* f, int16_t* buf, int buffer_length) {
     }
   }
   return ay->buf_len;
+}
+
+bool ym_file_step_registers(ym_file* f) {
+  if (f->real_end_all) return false;
+  if (f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    } else {
+      f->real_end_all = true;
+      return false;
+    }
+  }
+  /* Players.pas:2854-2869: All_GetRegisters[0] is bound DIRECTLY to
+   * YM5i_Get_Registers/YM6i_Get_Registers alone for a real .ym file -
+   * NOT a composite of the ym6_cur_tik-gated call plus YM6_Extra_
+   * GetRegisters that ym_file_make_buffer's own inner loop uses. Each
+   * of those two procedures is fully self-contained (confirmed by
+   * direct trace: both increment Global_Tick_Counter AND Position_In_
+   * VTX themselves, at their own tail - Players.pas:13833-13836/13998-
+   * 14004 - with no dependency on the tiks-on-int gating, which exists
+   * purely to convert MakeBufferYM5/6's own audio-SAMPLE-rate loop
+   * cadence into YM-tick cadence, a concern that doesn't exist when
+   * called once per tick directly the way Convs.pas's VBL2PSG/VBL2VTX
+   * do). Mirrored exactly here - this port's own ym5i_get_registers/
+   * ym6i_get_registers already self-advance global_tick_counter/
+   * position_in_vtx identically (see their own tails), so calling
+   * either alone, unconditionally, is the correct one-tick-per-call
+   * contract - NOT the gated/extra-augmented version this function
+   * originally (incorrectly) used, found via direct A/B oracle-diff
+   * testing against a real .ym file (see migration_debt.yaml). */
+  if (f->is_ym6)
+    ym6i_get_registers(f);
+  else
+    ym5i_get_registers(f);
+  if (f->global_tick_counter >= f->global_tick_max) {
+    if (f->do_loop) {
+      f->global_tick_counter = f->global_tick_max;
+    } else {
+      f->real_end_all = true;
+    }
+  }
+  return true;
 }

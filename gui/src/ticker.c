@@ -3,15 +3,54 @@
 #include <stdint.h>
 #include <string.h>
 
-#define TICKER_FONT_SIZE (GUI_TICKER_LINE_HEIGHT - 6)
 /* MainWin.pas:3389: BMP_VScroll.Canvas.Font.Color := $606060 - a
  * neutral gray (equal RGB channels, so BGR-vs-RGB byte order is moot). */
 #define TICKER_COLOR (0x60 / 255.0)
 
+/* MainWin.pas:3388: BMP_VScroll.Canvas.Font.Height := -scr_lineheight
+ * (scr_lineheight=24, MainWin.pas:60) - Delphi/Lazarus's TFont.Height,
+ * when negative, is a GDI convention meaning "size this font so its own
+ * rendered cell height (ascent+descent, i.e. TextHeight's result) is
+ * abs(Height) device pixels", NOT a nominal em-square/point size. Cairo's
+ * cairo_set_font_size sets the em-square directly, which for a typical
+ * bold sans-serif font renders noticeably SHORTER than that same numeric
+ * value used as a GDI Height would - a previous version of this file
+ * approximated the gap with an arbitrary "GUI_TICKER_LINE_HEIGHT - 6"
+ * fudge factor, which under-sized the text visibly smaller than the
+ * real Pascal ticker (confirmed by comparing directly against a live
+ * Ay_Emul instance side by side). Computed correctly here instead: cairo
+ * has no direct "size to pixel cell height" API, so a font is measured
+ * at an arbitrary trial em-size, then the true em-size is derived by
+ * scaling proportionally to hit the target cell height exactly (the
+ * standard GDI-Height-to-Cairo-em-size conversion) - using the same
+ * cairo_font_extents().height metric draw_and_masked already uses for
+ * this ticker's own vertical centering, so sizing and centering stay
+ * consistent with each other. Cached after the first call since it's
+ * the same font/weight/target every time. */
+static double ticker_font_size(void) {
+  static double cached = 0.0;
+  if (cached > 0.0) return cached;
+
+  const double trial_size = 100.0;
+  cairo_surface_t* surf =
+      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+  cairo_t* cr = cairo_create(surf);
+  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                          CAIRO_FONT_WEIGHT_BOLD);
+  cairo_set_font_size(cr, trial_size);
+  cairo_font_extents_t fe;
+  cairo_font_extents(cr, &fe);
+  cairo_destroy(cr);
+  cairo_surface_destroy(surf);
+
+  cached = trial_size * (double)GUI_TICKER_LINE_HEIGHT / fe.height;
+  return cached;
+}
+
 static void set_ticker_font(cairo_t* cr) {
   cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
                           CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, TICKER_FONT_SIZE);
+  cairo_set_font_size(cr, ticker_font_size());
 }
 
 /* MainWin.pas: TextWidth, via a throwaway 1x1 surface - just needed for

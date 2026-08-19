@@ -64,6 +64,18 @@ typedef struct mfp {
   uint8_t reg[24]; /* MFP_Registers.Index, $FFFA00-based, one byte/register */
   mfp_timer timers[4]; /* 0=A,1=B,2=C,3=D */
 
+  /* atari.pas: MCbyMFP = MC68000Freq/MFPFreq - converts an MFP-prescaler
+   * tick count into 68000 cycles (atari.pas:391,398's `* MCbyMFP`
+   * multiplier inside CalcTimerCnt/SetTimerDelayMode). Runtime-mutable
+   * (Mixer.pas's GBMFPFrq override, Set_MFP_Frq, MIG-0120) rather than a
+   * fixed compile-time ratio - mfp_init still seeds it to the exact same
+   * 13.0/4.0 value every prior caller implicitly relied on (MFPFreq =
+   * MainClockFreq/13, MC68000Freq = MainClockFreq/4, independent of
+   * MainClockFreq), so nothing that never touches the new override
+   * functions (atari_emulate_set_mfp_freq/atari_emulate_set_mc68000_freq)
+   * sees any behavior change. */
+  double mc_by_mfp;
+
   /* atari.pas: the single bit of Starscream's shared ctx(interrupts)
    * bitfield covering CPU interrupt level 6 - MIG-0051. Set when any
    * timer's request succeeds (mirrors s68000interrupt(6,...)=0), cleared

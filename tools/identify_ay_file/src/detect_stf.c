@@ -17,10 +17,6 @@
 
 #include <string.h>
 
-#define STF_PAT_SIZE 576          /* Players.pas: STF_PatSize = 9*64 */
-#define STF_PRE_PATS_SIZE 0xBF9   /* Players.pas: STF_PrePatsSize */
-#define STF_MAX_SIZE (STF_PRE_PATS_SIZE + STF_PAT_SIZE * 32)
-
 /* Depacked-buffer field offsets, ModTypes variant 15 (Players.pas:
  * 202-210): Samples[1..15]@0 (130B each: Vl[32] NTENs[32] Tn[32]*2 LpB LpS)
  * Positions[0..255]@1950 (2B each) PosLen@2462 Ornaments[0..16]@2463
@@ -34,16 +30,6 @@
 #define STF_PATLEN_OFF(i) (3008 + (size_t)((i) - 1))
 #define STF_LOOPPOS_OFF 3039
 #define STF_TITLE_OFF(i) (3040 + (size_t)((i) - 1))
-
-typedef struct {
-  const uint8_t* buf1; /* compressed input */
-  size_t psize;
-  size_t pos1;
-  uint8_t buf2[STF_MAX_SIZE]; /* depacked output */
-  size_t pos2;
-  bool ended;
-  bool ok;
-} stf_depack_state;
 
 static int stf_get_byte(stf_depack_state* s) {
   if (s->pos1 >= s->psize) return -1;
@@ -86,7 +72,7 @@ static bool stf_move_literal(stf_depack_state* s, int c) {
 /* Players.pas:1196-1329 STFDepackBytes, decoded in one continuous pass up
  * to STF_MAX_SIZE instead of Pascal's incremental per-checkpoint calls -
  * see this file's top comment for why that is equivalent. */
-static void stf_depack_all(stf_depack_state* s) {
+void stf_depack_all(stf_depack_state* s) {
   s->ok = true;
   s->ended = false;
   while (s->pos2 < STF_MAX_SIZE) {
